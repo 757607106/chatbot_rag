@@ -12,6 +12,48 @@ from chatbot_rag.rag.reranking_knowledge_base import RerankingKnowledgeBase
 KNOWLEDGE_BASE_DESCRIPTION = "用于回答项目资料相关问题的知识库。"
 
 
+class KnowledgeBaseRuntimeFactory:
+    """在共享向量存储连接上创建独立知识库句柄。"""
+
+    def __init__(self, settings: Settings, vector_store: QdrantStore) -> None:
+        """复用嵌入模型、重排器和 Qdrant 连接。"""
+        self._embedding_model = create_embedding_model(settings)
+        self._vector_store = vector_store
+        self._reranker = QwenTextReranker(
+            api_key=settings.dashscope_api_key,
+            model_name=settings.rerank_model_name,
+        )
+        self._candidate_top_k = settings.rerank_candidate_top_k
+
+    def create(
+        self,
+        *,
+        name: str,
+        description: str,
+        collection: str,
+    ) -> RerankingKnowledgeBase:
+        """创建只访问指定物理 collection 的逻辑知识库。"""
+        return RerankingKnowledgeBase(
+            name=name,
+            description=description,
+            embedding_model=self._embedding_model,
+            vector_store=self._vector_store,
+            collection=collection,
+            reranker=self._reranker,
+            candidate_top_k=self._candidate_top_k,
+        )
+
+
+@asynccontextmanager
+async def open_knowledge_base_runtime(
+    settings: Settings,
+) -> AsyncIterator[KnowledgeBaseRuntimeFactory]:
+    """打开可供多个知识库共享的 Qdrant 生命周期。"""
+    vector_store = _create_vector_store(settings)
+    async with vector_store:
+        yield KnowledgeBaseRuntimeFactory(settings, vector_store)
+
+
 @asynccontextmanager
 async def open_knowledge_base(
     settings: Settings,
@@ -24,19 +66,11 @@ async def open_knowledge_base(
     Yields:
         已连接 Qdrant 向量存储的知识库句柄。
     """
-    vector_store = _create_vector_store(settings)
-    async with vector_store:
-        yield RerankingKnowledgeBase(
+    async with open_knowledge_base_runtime(settings) as runtime:
+        yield runtime.create(
             name=settings.knowledge_base_name,
             description=KNOWLEDGE_BASE_DESCRIPTION,
-            embedding_model=create_embedding_model(settings),
-            vector_store=vector_store,
             collection=settings.knowledge_collection,
-            reranker=QwenTextReranker(
-                api_key=settings.dashscope_api_key,
-                model_name=settings.rerank_model_name,
-            ),
-            candidate_top_k=settings.rerank_candidate_top_k,
         )
 
 

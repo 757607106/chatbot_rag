@@ -27,6 +27,10 @@ type CloneThreadShellProps = {
   sheetTitle?: ReactNode | undefined;
   showSearch?: boolean | undefined;
   wrapNewThreadTooltip?: boolean | undefined;
+  sidebarNavigation?: ReactNode | undefined;
+  collapsedSidebarNavigation?: ReactNode | undefined;
+  mobileNavigation?: ReactNode | undefined;
+  onThreadNavigate?: (() => void) | undefined;
 };
 
 export const CloneThreadShell: FC<CloneThreadShellProps> = ({
@@ -40,14 +44,17 @@ export const CloneThreadShell: FC<CloneThreadShellProps> = ({
   sheetTitle,
   showSearch = true,
   wrapNewThreadTooltip = false,
+  sidebarNavigation,
+  collapsedSidebarNavigation,
+  mobileNavigation,
+  onThreadNavigate,
 }) => {
   const [internalCollapsed, setInternalCollapsed] = useState(true);
   const [internalMobileOpen, setInternalMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
   const hasThreads = useAuiState((s) => s.threads.threadIds.length > 0);
 
-  // A controlled value means the caller renders the chrome that drives it, so
-  // the shell omits its own toggle / trigger and forwards changes instead.
+  // 受控状态由调用方渲染对应操作入口，外壳仅转发状态变化。
   const collapsedControlled = collapsed !== undefined;
   const mobileControlled = mobileSidebarOpen !== undefined;
 
@@ -71,6 +78,7 @@ export const CloneThreadShell: FC<CloneThreadShellProps> = ({
       )
     ) {
       setMobileOpen(false);
+      onThreadNavigate?.();
     }
   };
 
@@ -116,7 +124,14 @@ export const CloneThreadShell: FC<CloneThreadShellProps> = ({
             : !sidebarCollapsed && <span className="ml-2 truncate text-sm font-medium">Chats</span>}
         </div>
 
+        {(sidebarNavigation !== undefined || collapsedSidebarNavigation !== undefined) && (
+          <div className={cn("shrink-0 px-2 pb-1", sidebarCollapsed && "px-1.5")}>
+            {sidebarCollapsed ? collapsedSidebarNavigation : sidebarNavigation}
+          </div>
+        )}
+
         <ThreadListRoot
+          onClick={closeMobileSidebarAfterNavigation}
           className={cn(
             "relative flex-1 transition-[padding,width] duration-200",
             sidebarCollapsed ? "w-12 overflow-hidden px-2 pt-1" : "w-65 overflow-y-auto p-3",
@@ -177,6 +192,9 @@ export const CloneThreadShell: FC<CloneThreadShellProps> = ({
           <SheetTitle className="flex h-12 shrink-0 items-center px-4 text-sm font-medium">
             {sheetTitle ?? "Chats"}
           </SheetTitle>
+          {mobileNavigation !== undefined && (
+            <div className="shrink-0 border-b px-3 pb-3">{mobileNavigation}</div>
+          )}
           <div
             className="relative flex-1 overflow-y-auto p-3"
             onClick={closeMobileSidebarAfterNavigation}

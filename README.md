@@ -27,9 +27,13 @@ export CHATBOT_EMBEDDING_MODEL="text-embedding-v4"
 export CHATBOT_RERANK_MODEL="qwen3-rerank"
 export CHATBOT_RERANK_CANDIDATE_TOP_K="50"
 export CHATBOT_DOCUMENTS_PATH="tests/docs_test"
+export CHATBOT_KNOWLEDGE_DOCUMENTS_ROOT_PATH=".data/knowledge/documents"
+export CHATBOT_DOCUMENT_VERSIONS_PATH=".data/knowledge/versions"
+export CHATBOT_KNOWLEDGE_CATALOG_PATH=".data/knowledge/catalog.sqlite3"
 export CHATBOT_MEDIA_PATH=".data/media"
 export CHATBOT_REMOTE_IMAGE_HOSTS="alidocs.oss-cn-zhangjiakou.aliyuncs.com"
 export CHATBOT_QDRANT_PATH=".data/qdrant"
+export CHATBOT_MAX_UPLOAD_MB="50"
 ```
 
 `tests/docs_test/` 是本地私有知识目录，已被 Git 忽略，其中的业务文档不会上传到
@@ -79,6 +83,17 @@ pnpm --dir frontend dev
 `POST /api/v1/chat/stream`，并把版本化 NDJSON 文本和图片累积为 assistant-ui
 `LocalRuntime` 消息。图片通过同源 `/api/media/<asset_id>` BFF 读取，浏览器不会
 接触原始文件路径或远程源地址。
+
+左侧栏的“知识库”入口提供无需登录的多知识库管理后台。后台支持知识库创建与切换、
+上传、显式同名替换、异步索引状态、
+单切片手工编辑、原文件版本回滚、重新索引、删除以及向量召回/重排序测试。每个新增知识库
+在 `CHATBOT_KNOWLEDGE_DOCUMENTS_ROOT_PATH` 下使用独立目录和独立 Qdrant collection；
+默认知识库继续使用 `CHATBOT_DOCUMENTS_PATH` 和 `CHATBOT_KNOWLEDGE_COLLECTION`，不会搬迁
+既有数据。版本文件和控制面状态分别持久化到 `CHATBOT_DOCUMENT_VERSIONS_PATH` 与
+`CHATBOT_KNOWLEDGE_CATALOG_PATH`。
+
+当前知识库后台不提供内置身份验证，只适用于本地开发或受信网络。部署时不得把管理 API
+直接暴露到公网；如需远程访问，应在应用外部增加网络或身份访问控制。
 
 ## 验证
 

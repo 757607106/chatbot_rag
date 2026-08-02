@@ -7,3 +7,8 @@ export function getChatUpstreamUrl(): string {
 export function getMediaUpstreamUrl(assetId: string): string {
   return new URL(`../media/${assetId}`, getChatUpstreamUrl()).toString();
 }
+
+export function getKnowledgeUpstreamUrl(pathname: string): string {
+  const root = new URL("../knowledge/", getChatUpstreamUrl());
+  return new URL(pathname, root).toString();
+}

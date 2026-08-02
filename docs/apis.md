@@ -104,3 +104,70 @@ PPTX 和 Excel 当前只解析文本与表格，不抽取图片。向量仍由�
 搜索结果，不补入未经精排的内容。网络异常会在每次 15 秒超时限制下执行最多两次尝试；
 最终失败时回退到原始向量 Top K，并在服务端记录错误。系统不会把上游响应细节或内部
 `<chatbot-media>` 标记发送给浏览器。
+
+## 知识库管理 API
+
+`/api/v1/knowledge/*` 不要求应用内登录或身份请求头。浏览器通过 Next.js
+`/api/knowledge/*` BFF 同源访问这些地址。该接口可以创建、修改和删除检索数据，只应在
+本地或受信网络使用，不得直接暴露到公网。
+
+### 知识库
+
+- `GET /api/v1/knowledge/knowledge-bases`：列出全部知识库及文档统计。
+- `POST /api/v1/knowledge/knowledge-bases`：创建独立目录和 Qdrant
+  collection 的知识库，请求包含 `name` 和 `description`。
+
+### 文档与任务
+
+以下路径前缀统一记为：
+
+```text
+/api/v1/knowledge/knowledge-bases/{knowledge_base_id}
+```
+
+- `GET {scope}/documents`：返回该知识库的文档、状态、切片汇总、格式和大小限制。
+- `POST {scope}/documents?replace=false`：以 multipart `file` 上传单个文档，返回 `202`；
+  同知识库同名且未显式替换返回 `409`，不同知识库允许同名。
+- `GET {scope}/documents/{document_id}`：读取逻辑文档和最近任务。
+- `POST {scope}/documents/{document_id}/reindex`：对当前活动原文件版本重新索引。
+- `DELETE {scope}/documents/{document_id}`：异步删除原文件、全部版本、索引和媒体。
+- `GET {scope}/jobs/{job_id}`：读取可在重启后恢复的任务状态。
+
+文档状态为 `queued`、`processing`、`ready`、`failed`、`unsupported` 或 `deleting`；
+任务操作为 `index`、`reindex`、`rollback` 或 `delete`，状态为 `queued`、`running`、
+`succeeded` 或 `failed`。替换失败但旧索引仍可用时，
+`has_active_index` 保持为 `true`。
+
+### 切片浏览与编辑
+
+`GET {scope}/documents/{document_id}/chunks?offset=0&limit=20` 从 Qdrant
+payload 读取当前活动向量文档，按 `chunk_index` 排序后分页。响应包含最终索引文本、来源、
+正文 SHA-256、手工编辑标记、结构元数据和浏览器安全图片引用，不返回 embedding 向量。
+
+`PATCH {scope}/documents/{document_id}/chunks/{chunk_index}` 请求示例：
+
+```json
+{"content":"修订后的切片正文","expected_content_hash":"64位小写SHA-256"}
+```
+
+接口只编辑活动文本切片，重新生成该切片向量并原子覆盖 Qdrant point。哈希不一致或文档正在
+处理时返回 `409`；编辑不会改写原文件。
+
+### 版本历史与回滚
+
+- `GET {scope}/documents/{document_id}/versions`：按时间倒序返回不可变原文件版本、版本号、
+  状态和是否可回滚。
+- `POST {scope}/documents/{document_id}/versions/{version_id}/rollback`：返回 `202`，后台重新
+  解析历史原文件并在成功后切换活动版本。回滚会替换当前索引中的手工切片编辑。
+
+### 召回测试
+
+`POST {scope}/retrieval-tests` 请求示例：
+
+```json
+{"query":"库存预警如何设置？","top_k":5,"candidate_top_k":50,"score_threshold":null}
+```
+
+该接口不进入 Agent 或回答生成，复用正式检索的查询规范化、Embedding、Qdrant 向量召回和
+qwen3-rerank。响应分别提供向量候选和最终结果，包括阶段排名、向量分数、重排分数、切片
+内容及阶段耗时；重排失败时 `rerank_status=fallback` 并明确返回向量排序回退结果。

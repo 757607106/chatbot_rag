@@ -13,6 +13,8 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 - `rag`：负责文档与图片解析、媒体资产、切块、幂等索引、Qdrant 生命周期和知识库装配。
 - `agents`：组合聊天模型、系统提示词和 AgentScope `RAGMiddleware`。
 - `services`：向协议适配层提供最终回复和原生事件流聊天用例。
+- `services/knowledge_coordinator.py`：维护知识库注册表及每库独立服务生命周期。
+- `services/knowledge_service.py`：组合单个知识库的文档版本、后台任务、切片编辑和召回诊断。
 - `services/api`：FastAPI 协议边界，负责请求校验、事件转换、资源装配和错误映射。
 - `frontend`：独立 Next.js 工程，使用 assistant-ui 组件和 Runtime 渲染对话交互。
 
@@ -25,6 +27,40 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 输入并创建 `UserMsg`；协议适配层只负责输入输出转换，不得直接管理模型、
 知识库或智能体主循环。具体协议类型不得进入 `services`、`agents` 或 `rag`。
 前端组件不直接请求模型、解析后端原生事件或持有任何服务端密钥。
+
+## 知识库管理控制面
+
+控制面支持创建和切换多个知识库。`CHATBOT_KNOWLEDGE_BASE_NAME` 指定兼容既有部署的
+默认资源；现有聊天 Agent 继续只绑定该默认知识库，不在聊天输入区增加知识库选择器。
+管理控制面由以下边界组成：
+
+```text
+知识库页面 -> Next.js BFF -> FastAPI 管理 API
+    -> KnowledgeManagementCoordinator -> KnowledgeBaseRegistry
+        -> KnowledgeManagementService(每库) -> SQLite 文档目录 + 版本文件 + 独立 Qdrant collection
+```
+
+SQLite 注册表保存知识库名称、独立 collection 和受管目录；文档目录保存逻辑文档、
+不可变原始版本、后台任务和不含正文的切片编辑审计。`knowledge_base_id + source_path` 构成
+文档名称唯一边界，不同知识库允许同名文件。每个知识库使用独立 Qdrant collection 和
+独立文件目录，管理 API 必须先解析 `knowledge_base_id`，再访问对应服务和目录。
+
+Qdrant payload 仍是活动索引切片的真实来源。手工编辑文本切片时，服务使用当前正文
+SHA-256 做乐观并发检查，重新生成该切片向量，并通过同一 Qdrant point 原子覆盖向量与
+payload；编辑不会修改原文件。版本回滚选择一个不可变原文件版本，作为可恢复后台任务
+重新解析和索引；成功后替换当前活动索引，因此此前的手工切片编辑不会被带入回滚版本。
+上传和替换仍先写入不可变版本，新版本失败时恢复旧活动文件和旧索引。删除任务明确删除
+活动原文件、全部内部版本、向量和关联媒体。
+
+进程启动时把运行中任务恢复为排队状态，并对账受管目录、目录数据库与 Qdrant 摘要。
+已有单知识库 SQLite 数据会自动把全局 `source_path UNIQUE` 迁移为知识库内复合唯一约束，
+默认文档目录与默认 collection 保持原值。已有 `.doc`、`.ppt` 文件登记为不支持状态。
+当前每个知识库使用一个单进程工作协程；多实例部署仍需替换为共享任务执行器。
+
+管理页面和管理 API 不提供内置身份验证，页面打开后直接初始化知识库工作区。Next.js BFF
+只负责同源转发、路径校验和上游错误映射，不维护登录会话或附加身份凭据。该管理面只适用
+于本地开发或受信网络；部署时不得直接暴露到公网，需要远程访问时必须在应用外部增加网络
+或身份访问控制。
 
 ## 目标 Web 对话链路
 
@@ -56,6 +92,10 @@ HTTP 层必须把 AgentScope 原生事件转换为独立、版本化的 Web 流�
 - `features/chat/runtime`：唯一 assistant-ui Runtime 适配和消息映射边界。
 - `features/chat/api`：HTTP 请求、流解析、取消和错误分类。
 - `features/chat/schemas`：与后端协议对齐的前端边界类型。
+- `features/knowledge`：知识库管理页面、BFF 客户端和严格边界类型。
+
+现有 `CloneThreadShell` 只增加一个可注入的固定导航区域；聊天消息、Composer、历史列表、
+折叠行为和页面主体保持不变。知识库入口在桌面展开/收起侧栏和移动端抽屉中使用同一路由。
 
 registry 组件是可定制源码，但通用组件不得直接 `fetch`，业务组件不得
 自建一套与 assistant-ui 平行的对话状态。设计 token、响应式布局、键盘可用性、
@@ -121,7 +161,8 @@ NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累
 用开发服务器和生产构建验证。升级 assistant-ui 时必须重新验证并优先恢复 Strict Mode。
 
 后端当前复用单个有状态智能体并串行处理请求，只能作为单进程单会话基线。
-用户上传附件、工具事件、语音、服务端线程隔离和持久化仍需独立设计与验收。详见
+聊天附件、工具事件、语音、服务端线程隔离和持久化仍需独立设计与验收。知识库后台上传
+不是聊天附件协议的一部分。详见
 `docs/adr/003-assistant-ui-web-frontend.md`。
 
 ## 文档图片数据流

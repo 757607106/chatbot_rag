@@ -19,6 +19,9 @@ def test_settings_load_expected_environment_values() -> None:
             "CHATBOT_RERANK_MODEL": "rerank-model",
             "CHATBOT_RERANK_CANDIDATE_TOP_K": "40",
             "CHATBOT_DOCUMENTS_PATH": "knowledge",
+            "CHATBOT_KNOWLEDGE_DOCUMENTS_ROOT_PATH": "managed-knowledge",
+            "CHATBOT_DOCUMENT_VERSIONS_PATH": "knowledge-versions",
+            "CHATBOT_KNOWLEDGE_CATALOG_PATH": "knowledge/catalog.sqlite3",
             "CHATBOT_MEDIA_PATH": "media",
             "CHATBOT_REMOTE_IMAGE_HOSTS": (
                 "images.example.com, cdn.example.com,images.example.com"
@@ -31,6 +34,7 @@ def test_settings_load_expected_environment_values() -> None:
             "CHATBOT_CHUNK_SIZE": "384",
             "CHATBOT_CHUNK_OVERLAP": "48",
             "CHATBOT_RAG_TOP_K": "8",
+            "CHATBOT_MAX_UPLOAD_MB": "25",
         },
     )
 
@@ -42,6 +46,11 @@ def test_settings_load_expected_environment_values() -> None:
     assert settings.rerank_model_name == "rerank-model"
     assert settings.rerank_candidate_top_k == 40
     assert settings.documents_path == Path("knowledge")
+    assert settings.knowledge_documents_root_path == Path(
+        "managed-knowledge",
+    )
+    assert settings.document_versions_path == Path("knowledge-versions")
+    assert settings.knowledge_catalog_path == Path("knowledge/catalog.sqlite3")
     assert settings.media_path == Path("media")
     assert settings.remote_image_hosts == (
         "images.example.com",
@@ -55,6 +64,7 @@ def test_settings_load_expected_environment_values() -> None:
     assert settings.chunk_size == 384
     assert settings.chunk_overlap == 48
     assert settings.rag_top_k == 8
+    assert settings.max_upload_bytes == 25 * 1024 * 1024
 
 
 def test_settings_use_defaults_for_optional_empty_values() -> None:
@@ -74,12 +84,20 @@ def test_settings_use_defaults_for_optional_empty_values() -> None:
     assert settings.rerank_model_name == "qwen3-rerank"
     assert settings.rerank_candidate_top_k == 50
     assert settings.documents_path == Path("tests/docs_test")
+    assert settings.knowledge_documents_root_path == Path(
+        ".data/knowledge/documents",
+    )
+    assert settings.document_versions_path == Path(".data/knowledge/versions")
+    assert settings.knowledge_catalog_path == Path(
+        ".data/knowledge/catalog.sqlite3",
+    )
     assert settings.media_path == Path(".data/media")
     assert settings.remote_image_hosts == (
         "alidocs.oss-cn-zhangjiakou.aliyuncs.com",
     )
     assert settings.qdrant_path == Path(".data/qdrant")
     assert settings.rag_top_k == 5
+    assert settings.max_upload_bytes == 50 * 1024 * 1024
 
 
 def test_settings_reject_missing_api_key() -> None:
@@ -154,5 +172,16 @@ def test_settings_reject_remote_image_url_in_host_allowlist() -> None:
             {
                 "DASHSCOPE_API_KEY": "secret",
                 "CHATBOT_REMOTE_IMAGE_HOSTS": "https://images.example.com",
+            },
+        )
+
+
+def test_settings_reject_unsafe_resource_id() -> None:
+    """进入 URL 与目录的资源标识不能包含路径分隔符。"""
+    with pytest.raises(ConfigurationError, match="must contain only"):
+        Settings.from_env(
+            {
+                "DASHSCOPE_API_KEY": "secret",
+                "CHATBOT_KNOWLEDGE_BASE_NAME": "unsafe/value",
             },
         )

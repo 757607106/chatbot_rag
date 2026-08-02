@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import cast
+import time
+from dataclasses import dataclass
+from typing import Literal, cast
 
 from agentscope.embedding import EmbeddingModelBase
 from agentscope.message import DataBlock, TextBlock
@@ -16,6 +18,30 @@ from chatbot_rag.rag.media_assets import strip_media_references
 _SPEAKER_PREFIX_PATTERN = re.compile(r"^(?:web_user|user):\s*")
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalTraceItem:
+    """召回诊断中的一个候选及其阶段排名。"""
+
+    result: VectorSearchResult
+    vector_rank: int
+    vector_score: float
+    final_rank: int | None = None
+    rerank_score: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalTrace:
+    """一次向量召回与重排序的可公开诊断结果。"""
+
+    query: str
+    vector_candidates: tuple[RetrievalTraceItem, ...]
+    final_results: tuple[RetrievalTraceItem, ...]
+    rerank_status: Literal["succeeded", "skipped", "fallback"]
+    vector_elapsed_ms: float
+    rerank_elapsed_ms: float
+    total_elapsed_ms: float
 
 
 class RerankingKnowledgeBase(KnowledgeBase):  # type: ignore[misc]
@@ -77,31 +103,109 @@ class RerankingKnowledgeBase(KnowledgeBase):  # type: ignore[misc]
             按 qwen3-rerank 相关性降序排列的检索结果。重排序服务异常时
             返回原始向量排序，避免无上下文调用生成模型。
         """
+        trace = await self.search_with_trace(
+            queries=queries,
+            top_k=top_k,
+            score_threshold=score_threshold,
+        )
+        return [item.result for item in trace.final_results]
+
+    async def search_with_trace(
+        self,
+        queries: list[str | TextBlock | DataBlock],
+        top_k: int = 5,
+        score_threshold: float | None = None,
+        candidate_top_k: int | None = None,
+    ) -> RetrievalTrace:
+        """执行与正式检索一致的流程并保留阶段排名和耗时。
+
+        Args:
+            queries: 等待嵌入和检索的查询列表。
+            top_k: 重排序后返回的最大结果数。
+            score_threshold: 向量召回阶段的最低相似度。
+            candidate_top_k: 可选的诊断候选数量，默认使用运行时配置。
+
+        Returns:
+            不包含向量内容或内部模型响应的结构化诊断结果。
+
+        Raises:
+            ValueError: 排名数量超出有效范围时抛出。
+        """
+        if top_k <= 0:
+            raise ValueError("top_k must be greater than zero")
+        resolved_candidate_top_k = (
+            self._candidate_top_k
+            if candidate_top_k is None
+            else candidate_top_k
+        )
+        if resolved_candidate_top_k < top_k:
+            raise ValueError("candidate_top_k must not be less than top_k")
+        if resolved_candidate_top_k > 500:
+            raise ValueError("candidate_top_k must not exceed 500")
+
+        started_at = time.perf_counter()
         normalized_queries = _normalize_queries(queries)
-        candidate_top_k = max(top_k, self._candidate_top_k)
+        vector_started_at = time.perf_counter()
         candidates = cast(
             list[VectorSearchResult],
             await super().search(
                 queries=normalized_queries,
-                top_k=candidate_top_k,
+                top_k=resolved_candidate_top_k,
                 score_threshold=score_threshold,
             ),
         )
-        if not candidates:
-            return []
-
+        vector_elapsed_ms = _elapsed_ms(vector_started_at)
         query = _join_text_queries(normalized_queries)
-        rerankable: list[VectorSearchResult] = []
+        vector_items = tuple(
+            RetrievalTraceItem(
+                result=candidate,
+                vector_rank=index,
+                vector_score=candidate.score,
+            )
+            for index, candidate in enumerate(candidates, start=1)
+        )
+        if not candidates:
+            return RetrievalTrace(
+                query=query,
+                vector_candidates=vector_items,
+                final_results=(),
+                rerank_status="skipped",
+                vector_elapsed_ms=vector_elapsed_ms,
+                rerank_elapsed_ms=0.0,
+                total_elapsed_ms=_elapsed_ms(started_at),
+            )
+
+        rerankable: list[RetrievalTraceItem] = []
         documents: list[str] = []
-        for candidate in candidates:
+        for item in vector_items:
+            candidate = item.result
             if not isinstance(candidate.chunk.content, TextBlock):
                 continue
             document = strip_media_references(candidate.chunk.content.text)
             if document:
-                rerankable.append(candidate)
+                rerankable.append(item)
                 documents.append(_format_rerank_document(candidate, document))
         if not query or not rerankable:
-            return candidates[:top_k]
+            final_items = tuple(
+                RetrievalTraceItem(
+                    result=item.result,
+                    vector_rank=item.vector_rank,
+                    vector_score=item.vector_score,
+                    final_rank=index,
+                )
+                for index, item in enumerate(vector_items[:top_k], start=1)
+            )
+            return RetrievalTrace(
+                query=query,
+                vector_candidates=vector_items,
+                final_results=final_items,
+                rerank_status="skipped",
+                vector_elapsed_ms=vector_elapsed_ms,
+                rerank_elapsed_ms=0.0,
+                total_elapsed_ms=_elapsed_ms(started_at),
+            )
+
+        rerank_started_at = time.perf_counter()
         try:
             scores = await self._reranker.rerank(
                 query=query,
@@ -112,14 +216,48 @@ class RerankingKnowledgeBase(KnowledgeBase):  # type: ignore[misc]
             logger.exception(
                 "qwen3-rerank failed; falling back to vector ranking.",
             )
-            return candidates[:top_k]
-
-        return [
-            rerankable[score.index].model_copy(
-                update={"score": score.relevance_score},
+            rerank_elapsed_ms = _elapsed_ms(rerank_started_at)
+            fallback_items = tuple(
+                RetrievalTraceItem(
+                    result=item.result,
+                    vector_rank=item.vector_rank,
+                    vector_score=item.vector_score,
+                    final_rank=index,
+                )
+                for index, item in enumerate(vector_items[:top_k], start=1)
             )
-            for score in scores
-        ][:top_k]
+            return RetrievalTrace(
+                query=query,
+                vector_candidates=vector_items,
+                final_results=fallback_items,
+                rerank_status="fallback",
+                vector_elapsed_ms=vector_elapsed_ms,
+                rerank_elapsed_ms=rerank_elapsed_ms,
+                total_elapsed_ms=_elapsed_ms(started_at),
+            )
+
+        rerank_elapsed_ms = _elapsed_ms(rerank_started_at)
+        final_items = tuple(
+            RetrievalTraceItem(
+                result=rerankable[score.index].result.model_copy(
+                    update={"score": score.relevance_score},
+                ),
+                vector_rank=rerankable[score.index].vector_rank,
+                vector_score=rerankable[score.index].vector_score,
+                final_rank=index,
+                rerank_score=score.relevance_score,
+            )
+            for index, score in enumerate(scores[:top_k], start=1)
+        )
+        return RetrievalTrace(
+            query=query,
+            vector_candidates=vector_items,
+            final_results=final_items,
+            rerank_status="succeeded",
+            vector_elapsed_ms=vector_elapsed_ms,
+            rerank_elapsed_ms=rerank_elapsed_ms,
+            total_elapsed_ms=_elapsed_ms(started_at),
+        )
 
 
 def _normalize_queries(
@@ -171,3 +309,8 @@ def _format_rerank_document(
     if document == source_context or document.startswith(f"{source_context}\n"):
         return document
     return f"{source_context}\n\n{document}"
+
+
+def _elapsed_ms(started_at: float) -> float:
+    """返回适合管理界面展示的毫秒耗时。"""
+    return round((time.perf_counter() - started_at) * 1000, 2)

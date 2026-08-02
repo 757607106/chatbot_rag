@@ -24,6 +24,9 @@ class Settings:
     rerank_model_name: str = "qwen3-rerank"
     rerank_candidate_top_k: int = 50
     documents_path: Path = Path("tests/docs_test")
+    knowledge_documents_root_path: Path = Path(".data/knowledge/documents")
+    document_versions_path: Path = Path(".data/knowledge/versions")
+    knowledge_catalog_path: Path = Path(".data/knowledge/catalog.sqlite3")
     media_path: Path = Path(".data/media")
     remote_image_hosts: tuple[str, ...] = (
         "alidocs.oss-cn-zhangjiakou.aliyuncs.com",
@@ -36,6 +39,7 @@ class Settings:
     chunk_size: int = 512
     chunk_overlap: int = 64
     rag_top_k: int = 5
+    max_upload_bytes: int = 50 * 1024 * 1024
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -68,6 +72,18 @@ class Settings:
         documents_path = source.get(
             "CHATBOT_DOCUMENTS_PATH",
             "tests/docs_test",
+        ).strip()
+        knowledge_documents_root_path = source.get(
+            "CHATBOT_KNOWLEDGE_DOCUMENTS_ROOT_PATH",
+            ".data/knowledge/documents",
+        ).strip()
+        document_versions_path = source.get(
+            "CHATBOT_DOCUMENT_VERSIONS_PATH",
+            ".data/knowledge/versions",
+        ).strip()
+        knowledge_catalog_path = source.get(
+            "CHATBOT_KNOWLEDGE_CATALOG_PATH",
+            ".data/knowledge/catalog.sqlite3",
         ).strip()
         media_path = source.get(
             "CHATBOT_MEDIA_PATH",
@@ -120,6 +136,11 @@ class Settings:
             "CHATBOT_RERANK_CANDIDATE_TOP_K",
             50,
         )
+        max_upload_megabytes = _read_positive_int(
+            source,
+            "CHATBOT_MAX_UPLOAD_MB",
+            50,
+        )
         if chunk_overlap >= chunk_size:
             raise ConfigurationError(
                 "CHATBOT_CHUNK_OVERLAP must be less than CHATBOT_CHUNK_SIZE",
@@ -139,7 +160,11 @@ class Settings:
             raise ConfigurationError(
                 "CHATBOT_QDRANT_API_KEY requires CHATBOT_QDRANT_URL",
             )
-
+        if not _is_safe_resource_id(knowledge_base_name):
+            raise ConfigurationError(
+                "CHATBOT_KNOWLEDGE_BASE_NAME must contain only letters, "
+                "numbers, dots, underscores, or hyphens",
+            )
         return cls(
             dashscope_api_key=api_key,
             model_name=model_name or "qwen-plus",
@@ -151,6 +176,17 @@ class Settings:
             rerank_model_name=rerank_model_name or "qwen3-rerank",
             rerank_candidate_top_k=rerank_candidate_top_k,
             documents_path=Path(documents_path or "tests/docs_test"),
+            knowledge_documents_root_path=Path(
+                knowledge_documents_root_path
+                or ".data/knowledge/documents",
+            ),
+            document_versions_path=Path(
+                document_versions_path or ".data/knowledge/versions",
+            ),
+            knowledge_catalog_path=Path(
+                knowledge_catalog_path
+                or ".data/knowledge/catalog.sqlite3",
+            ),
             media_path=Path(media_path or ".data/media"),
             remote_image_hosts=remote_image_hosts,
             qdrant_path=Path(qdrant_path or ".data/qdrant"),
@@ -163,6 +199,7 @@ class Settings:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             rag_top_k=rag_top_k,
+            max_upload_bytes=max_upload_megabytes * 1024 * 1024,
         )
 
 
@@ -180,6 +217,15 @@ def _read_remote_image_hosts(value: str) -> tuple[str, ...]:
         if host not in hosts:
             hosts.append(host)
     return tuple(hosts)
+
+
+def _is_safe_resource_id(value: str) -> bool:
+    """校验可安全进入 URL 路径和内部目录的资源标识。"""
+    return bool(value) and all(
+        character.isascii()
+        and (character.isalnum() or character in "._-")
+        for character in value
+    )
 
 
 def _read_positive_int(

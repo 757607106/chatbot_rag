@@ -244,6 +244,34 @@ class MediaAssetStore:
                 continue
             manifests.append(manifest)
 
+        self._prune_unreferenced_assets(manifests)
+
+    def delete_document(self, source: str) -> None:
+        """删除一个文档的图片清单并清理无引用资产。"""
+        manifest_path = self._manifest_path(source)
+        if manifest_path.exists():
+            manifest_path.unlink()
+
+        manifests: list[_DocumentManifest] = []
+        for path in sorted(self._manifests_path.glob("*.json")):
+            try:
+                manifests.append(
+                    _DocumentManifest.model_validate_json(
+                        path.read_text(encoding="utf-8"),
+                    ),
+                )
+            except (OSError, ValidationError) as error:
+                raise MediaAssetError(
+                    f"图片清单损坏：{path.name}",
+                ) from error
+        self._prune_unreferenced_assets(manifests)
+
+    def _prune_unreferenced_assets(
+        self,
+        manifests: list[_DocumentManifest],
+    ) -> None:
+        """根据当前清单删除不再被引用的图片记录和内容。"""
+
         referenced = {
             asset_id
             for manifest in manifests

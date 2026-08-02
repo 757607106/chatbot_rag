@@ -13,7 +13,7 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import { useEffect, useState, type FC } from "react";
+import { useEffect, useState, type FC, type ReactNode } from "react";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useShallow } from "zustand/shallow";
 import {
@@ -41,9 +41,23 @@ import { ImageMessagePart } from "@/components/assistant-ui/image-message-part";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { CloneThreadShell } from "./clone-thread-shell";
 
-export const ChatGPT: FC = () => {
+type ChatGPTProps = {
+  sidebarNavigation?: ReactNode | undefined;
+  collapsedSidebarNavigation?: ReactNode | undefined;
+  mobileNavigation?: ReactNode | undefined;
+};
+
+export const ChatGPT: FC<ChatGPTProps> = ({
+  sidebarNavigation,
+  collapsedSidebarNavigation,
+  mobileNavigation,
+}) => {
   return (
-    <CloneThreadShell>
+    <CloneThreadShell
+      sidebarNavigation={sidebarNavigation}
+      collapsedSidebarNavigation={collapsedSidebarNavigation}
+      mobileNavigation={mobileNavigation}
+    >
       <ThreadPrimitive.Root className="flex h-full flex-col items-stretch bg-white px-4 text-[#0d0d0d] dark:bg-black dark:text-[#ececec]">
         <AuiIf condition={(s) => s.thread.isEmpty}>
           <EmptyState />

@@ -6,31 +6,35 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from agentscope.rag import ApproxTokenChunker
 from fastapi import FastAPI
 
 from chatbot_rag.agents import create_rag_agent
 from chatbot_rag.config import Settings
 from chatbot_rag.rag import (
-    ContextPreservingChunker,
-    DocumentIngestor,
+    KnowledgeBaseRegistry,
     MediaAssetStore,
-    open_knowledge_base,
+    open_knowledge_base_runtime,
 )
-from chatbot_rag.services import ChatService
+from chatbot_rag.services import (
+    ChatService,
+    KnowledgeManagementCoordinator,
+)
 from chatbot_rag.services.api.chat_routes import router as chat_router
+from chatbot_rag.services.api.knowledge_routes import router as knowledge_router
 from chatbot_rag.services.api.media_routes import router as media_router
 
 
 def create_app(
     chat_service: ChatService | None = None,
     media_store: MediaAssetStore | None = None,
+    knowledge_coordinator: KnowledgeManagementCoordinator | None = None,
 ) -> FastAPI:
     """创建 HTTP 应用。
 
     Args:
         chat_service: 隔离测试可注入的聊天服务。
         media_store: 隔离测试可注入的图片资产仓库。
+        knowledge_coordinator: 隔离测试可注入的多知识库协调器。
 
     Returns:
         完成配置的 FastAPI 应用。
@@ -43,10 +47,12 @@ def create_app(
     )
     app.state.chat_lock = asyncio.Lock()
     app.state.media_store = media_store
+    app.state.knowledge_coordinator = knowledge_coordinator
     if chat_service is not None:
         app.state.chat_service = chat_service
     app.include_router(chat_router)
     app.include_router(media_router)
+    app.include_router(knowledge_router)
     return app
 
 
@@ -59,18 +65,22 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         allowed_remote_hosts=settings.remote_image_hosts,
     )
     app.state.media_store = media_store
-    async with open_knowledge_base(settings) as knowledge_base:
-        await DocumentIngestor(
-            knowledge_base,
-            ContextPreservingChunker(
-                ApproxTokenChunker(
-                    chunk_size=settings.chunk_size,
-                    overlap=settings.chunk_overlap,
-                ),
-            ),
+    async with open_knowledge_base_runtime(settings) as runtime_factory:
+        coordinator = KnowledgeManagementCoordinator(
+            settings=settings,
+            registry=KnowledgeBaseRegistry(settings.knowledge_catalog_path),
+            runtime_factory=runtime_factory,
             media_store=media_store,
-        ).ingest_directory(settings.documents_path)
-        app.state.chat_service = ChatService(
-            await create_rag_agent(settings, knowledge_base),
         )
-        yield
+        app.state.knowledge_coordinator = coordinator
+        await coordinator.start()
+        app.state.chat_service = ChatService(
+            await create_rag_agent(
+                settings,
+                coordinator.default_service().knowledge_base,
+            ),
+        )
+        try:
+            yield
+        finally:
+            await coordinator.stop()

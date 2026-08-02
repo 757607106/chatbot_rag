@@ -47,6 +47,10 @@ class IngestionStage(Enum):
     INDEXING = "正在创建索引..."
 
 
+class DocumentIngestionError(RuntimeError):
+    """单个文档无法生成可索引内容时抛出的异常。"""
+
+
 @dataclass(frozen=True, slots=True)
 class IngestionSummary:
     """一次目录摄取操作的统计结果。"""
@@ -54,6 +58,15 @@ class IngestionSummary:
     indexed_documents: int
     skipped_documents: int
     deleted_documents: int
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedDocument:
+    """单文档索引完成后的稳定结果。"""
+
+    vector_document_id: str
+    content_hash: str
+    chunk_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +273,113 @@ class DocumentIngestor:
             skipped_documents=skipped_documents,
             deleted_documents=len(document_ids_to_delete),
         )
+
+    async def ingest_file(
+        self,
+        file_path: Path,
+        source_path: str,
+        vector_document_id: str,
+        document_metadata: Mapping[str, object] | None = None,
+        progress_callback: Callable[[IngestionStage], None] | None = None,
+        media_document_key: str | None = None,
+    ) -> IndexedDocument:
+        """索引一个文件，并在新版本成功后清理同来源旧索引。
+
+        Args:
+            file_path: 等待索引的不可变版本文件。
+            source_path: 面向检索结果展示的受管目录相对路径。
+            vector_document_id: 本次索引写入使用的唯一版本标识。
+            document_metadata: 需要传播到每个切片的管理元数据。
+            progress_callback: 可选的摄取阶段通知函数。
+            media_document_key: 隔离知识库图片清单的内部键。
+
+        Returns:
+            新向量文档标识、内容摘要和最终切片数量。
+
+        Raises:
+            DocumentIngestionError: 格式不受支持或无法生成有效切片。
+        """
+        extension = Path(source_path).suffix.lower()
+        parser = self._parsers.get(extension)
+        if parser is None:
+            raise DocumentIngestionError(
+                f"不支持的文档格式：{extension or '无扩展名'}",
+            )
+        if progress_callback is not None:
+            progress_callback(IngestionStage.PARSING)
+
+        content = await asyncio.to_thread(file_path.read_bytes)
+        content_hash = hashlib.sha256(content).hexdigest()
+        media_key = media_document_key or source_path
+        sections = await parser.parse(file=content, filename=media_key)
+        for section in sections:
+            section.source = source_path
+        chunks = _remove_empty_text_chunks(
+            await self._chunker.chunk(sections),
+        )
+        if not chunks:
+            raise DocumentIngestionError("文档解析后没有可索引的文本内容。")
+
+        if progress_callback is not None:
+            progress_callback(IngestionStage.INDEXING)
+
+        existing_versions = (
+            await self._existing_documents_by_source()
+        ).get(source_path, [])
+        if any(
+            summary.document_id == vector_document_id
+            for summary in existing_versions
+        ):
+            await self._knowledge_base.delete_document(vector_document_id)
+
+        metadata = {
+            SOURCE_PATH_KEY: source_path,
+            CONTENT_HASH_KEY: content_hash,
+            INGESTION_PIPELINE_KEY: INGESTION_PIPELINE_VERSION,
+            **dict(document_metadata or {}),
+        }
+        media_asset_ids = _extract_chunk_media_asset_ids(chunks)
+        try:
+            await self._knowledge_base.insert_document(
+                chunks,
+                document_id=vector_document_id,
+                document_metadata=metadata,
+            )
+            if self._media_store is not None:
+                self._media_store.commit_document(
+                    media_key,
+                    media_asset_ids,
+                )
+        except Exception:
+            await self._knowledge_base.delete_document(vector_document_id)
+            raise
+
+        for summary in existing_versions:
+            if summary.document_id != vector_document_id:
+                await self._knowledge_base.delete_document(summary.document_id)
+
+        return IndexedDocument(
+            vector_document_id=vector_document_id,
+            content_hash=content_hash,
+            chunk_count=len(chunks),
+        )
+
+    async def delete_source(
+        self,
+        source_path: str,
+        media_document_key: str | None = None,
+    ) -> int:
+        """删除一个来源的全部向量版本和图片清单。"""
+        versions = (
+            await self._existing_documents_by_source()
+        ).get(source_path, [])
+        for summary in versions:
+            await self._knowledge_base.delete_document(summary.document_id)
+        if self._media_store is not None:
+            self._media_store.delete_document(
+                media_document_key or source_path,
+            )
+        return len(versions)
 
     async def _existing_documents_by_source(
         self,
