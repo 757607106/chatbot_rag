@@ -32,6 +32,14 @@ export CHATBOT_REMOTE_IMAGE_HOSTS="alidocs.oss-cn-zhangjiakou.aliyuncs.com"
 export CHATBOT_QDRANT_PATH=".data/qdrant"
 ```
 
+`tests/docs_test/` 是本地私有知识目录，已被 Git 忽略，其中的业务文档不会上传到
+代码仓库。全新克隆项目后需要先创建该目录，或将 `CHATBOT_DOCUMENTS_PATH` 指向其他
+已存在的本地文档目录：
+
+```bash
+mkdir -p tests/docs_test
+```
+
 应用默认递归读取 `tests/docs_test` 中的 `.md`、`.markdown`、`.txt`、`.pdf`、
 `.docx`、`.pptx`、`.xls` 和 `.xlsx` 文件，使用 DashScope Embedding 建立索引，
 并持久化到本地 Qdrant。每个文本块会携带文档来源；Markdown 保留标题路径，PDF
