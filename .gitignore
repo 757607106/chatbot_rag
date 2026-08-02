@@ -1,0 +1,22 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Virtual environments and local configuration
+.venv/
+.env
+.data/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store

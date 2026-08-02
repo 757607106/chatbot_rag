@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatbot-rag"
+version = "0.1.0"
+description = "A retrieval-augmented chatbot built with AgentScope 2.0.5."
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: verifies contracts that require installed runtime dependencies",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["chatbot_rag"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+follow_imports = "skip"
+disallow_untyped_decorators = false
