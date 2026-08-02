@@ -5,16 +5,23 @@ __pycache__/
 .mypy_cache/
 .coverage
 htmlcov/
+.playwright-cli/
+output/playwright/
 
 # Build outputs
 build/
 dist/
 *.egg-info/
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+frontend/*.tsbuildinfo
 
 # Virtual environments and local configuration
 .venv/
 .env
 .data/
+frontend/.env.local
 
 # IDE and operating-system files
 .idea/

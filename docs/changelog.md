@@ -5,6 +5,16 @@
 - 废弃并移除交互式命令行层、可执行入口、专属测试和直接依赖，保留 RAG、
   智能体及协议无关的聊天服务。
 - 优化 RAG 智能体系统提示词为中文，明确引用来源格式和回答语言要求。
+- 确立 Next.js、TypeScript 与 assistant-ui `LocalRuntime` 的 Web 前端架构，补充
+  前后端协议边界、流式聊天、依赖锁定、前端测试、安全与体验规范。
+- 增加 FastAPI `POST /api/v1/chat/stream`，将 AgentScope 回复事件转换为版本化
+  NDJSON，并过滤思考过程与内部异常细节。
+- 增加 Next.js 同源 BFF、NDJSON 解析器和 assistant-ui `ChatModelAdapter`，支持
+  累积文本流、取消与公开错误。
+- 直接接入 assistant-ui 官方 ChatGPT demo 页面源码及配套会话栏组件，不维护
+  另一套自定义聊天视觉实现。
+- 记录并隔离 assistant-ui 0.15.1 在 Next.js 开发 Strict Mode 双重挂载下的
+  LocalRuntime 初始线程绑定问题；暂时关闭 Strict Mode，升级时必须重新验证。
 
 ## 0.1.0
 
