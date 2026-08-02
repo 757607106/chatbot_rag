@@ -2,7 +2,7 @@
 
 ## 状态
 
-已采纳移除决定；替代技术待原型验收。
+已采纳 prompt_toolkit + Rich；真实终端手工验收待完成。
 
 ## 背景
 
@@ -16,19 +16,30 @@ AgentScope 2.0.5 继续负责智能体、RAG 和事件流。终端层必须作�
 
 ## 决策
 
-删除 Textual CLI、命令入口及只服务于该界面的流式适配。在替代技术通过真实
-终端验收前，项目不提供交互式终端入口。
+删除 Textual CLI、命令入口及只服务于该界面的流式适配。替代实现使用
+prompt_toolkit 负责终端原生输入，使用 Rich 负责增量输出和结构化展示。
 
-下一轮选型采用两级验证门：
+选型采用两级验证门：
 
-1. 首先用 `prompt_toolkit` 构建不接入正式入口的最小输入原型，只验证中文
-   输入、真实光标、提交、换行、异步事件和窗口缩放。
-2. 如果 Python 原型通过全部验收，则继续使用 Python 单进程方案；如果任一
-   核心输入指标失败，则停止扩展该原型，改用 Bubble Tea v2 构建独立前端，
-   通过本地结构化协议连接 Python AgentScope 后端。
+1. 使用 `prompt_toolkit` 验证中文输入、真实光标、提交、换行、异步事件和
+   窗口缩放。自动化测试通过可注入输入输出验证提交、换行与历史导航；真实
+   终端和中文输入法组合继续作为发布前手工检查。
+2. Python 单进程方案使用 AgentScope 原生 `reply_stream` 事件；如果后续真实
+   终端验收发现无法修复的核心输入问题，再停止扩展并评估 Bubble Tea v2。
 
-原型不得同时引入 Markdown、工具面板、主题系统等展示功能。输入链路通过后，
-再逐项增加流式输出、工具状态、消息排队和样式。
+正式展示层使用 Rich `Markdown`、`Panel` 和追加式文本渲染；`Status` 仅用于
+输入提示启动前的知识库准备阶段。
+
+> 修订（2026-08）：流式阶段最初只刷新轻量文本、文本块结束后再解析
+> Markdown，后改为在 Rich `Live` 视图中实时渲染 Markdown。真实终端验收
+> 发现 `Live`/`Status` 与 prompt_toolkit 活动输入提示存在根本冲突：会话
+> 控制台在 `patch_stdout` 之前创建、绕过 `StdoutProxy` 直写终端，`Live`
+> 的原地重绘序列覆盖输入区且在整个回复期间隐藏终端光标，表现为消息回显
+> 丢失（"发了消息没有反应"）和光标显示异常。最终决策：会话期间所有输出
+> 改为追加式——控制台在 `patch_stdout` 内创建并写入 `StdoutProxy`，由
+> prompt_toolkit 统一安排在提示区上方打印；文本按行追加渲染（Markdown 行
+> 逐行渲染、代码围栏与表格聚合、纯文本逐字），回复活动状态移入输入提示区
+> 显示。代价是放弃行内原地重绘，换取与持久输入提示完全兼容的渲染路径。
 
 ## 候选方案
 
@@ -72,14 +83,18 @@ AgentScope 2.0.5 继续负责智能体、RAG 和事件流。终端层必须作�
 
 ## 影响
 
-- 当前项目暂时没有可执行聊天命令，但核心服务保持可测试和可复用。
-- 新终端界面必须以小型原型开始，不能直接在核心项目中堆叠展示功能。
-- 技术选择由真实终端验收结果决定，不再以截图或 headless 测试作为完成标准。
+- 项目恢复 `chatbot-rag` 和 `python -m chatbot_rag` 两种启动方式。
+- CLI 保持为独立协议适配层，核心服务只增加 AgentScope 原生事件流接口。
+- 自动化测试不能替代真实终端验收；发布前仍需完成本文列出的手工检查。
 
 ## 参考资料
 
 - [prompt_toolkit：输入、中文字符与光标](https://python-prompt-toolkit.readthedocs.io/en/stable/pages/asking_for_input.html)
 - [prompt_toolkit：全屏应用](https://python-prompt-toolkit.readthedocs.io/en/stable/pages/full_screen_apps.html)
+- [Rich：Status](https://rich.readthedocs.io/en/latest/reference/status.html)
+- [Rich：Live Display](https://rich.readthedocs.io/en/latest/live.html)
+- [Rich：Markdown](https://rich.readthedocs.io/en/latest/markdown.html)
+- [Rich：Panel](https://rich.readthedocs.io/en/latest/panel.html)
 - [Bubble Tea v2](https://github.com/charmbracelet/bubbletea/releases)
 - [Codex Rust TUI 代码结构](https://github.com/openai/codex/blob/main/codex-rs/README.md)
 - [Ink](https://github.com/vadimdemedes/ink)

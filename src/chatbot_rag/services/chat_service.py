@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Protocol
 
+from agentscope.event import AgentEvent
 from agentscope.message import Msg, UserMsg
 
 
@@ -12,6 +14,9 @@ class ReplyAgent(Protocol):
 
     async def reply(self, inputs: Msg) -> Msg:
         """根据一条输入消息生成助手回复。"""
+
+    def reply_stream(self, inputs: Msg) -> AsyncIterator[AgentEvent]:
+        """根据一条输入消息持续生成回复事件。"""
 
 
 class ChatService:
@@ -36,6 +41,27 @@ class ChatService:
         """
         user_message = self._create_user_message(message, user_name)
         return await self._agent.reply(user_message)
+
+    async def reply_stream(
+        self,
+        message: str,
+        user_name: str = "user",
+    ) -> AsyncIterator[AgentEvent]:
+        """以 AgentScope 原生事件流返回助手回复。
+
+        Args:
+            message: 非空的用户消息。
+            user_name: 与调用方关联的稳定名称。
+
+        Yields:
+            AgentScope 2.0.5 定义的增量回复事件。
+
+        Raises:
+            ValueError: 消息或用户名为空时抛出。
+        """
+        user_message = self._create_user_message(message, user_name)
+        async for event in self._agent.reply_stream(user_message):
+            yield event
 
     @staticmethod
     def _create_user_message(message: str, user_name: str) -> UserMsg:

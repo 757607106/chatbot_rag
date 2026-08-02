@@ -1,6 +1,9 @@
 """聊天应用服务测试。"""
 
+from collections.abc import AsyncIterator
+
 import pytest
+from agentscope.event import AgentEvent, ReplyStartEvent
 from agentscope.message import AssistantMsg, Msg
 
 from chatbot_rag.services import ChatService
@@ -17,6 +20,15 @@ class FakeAgent:
         """捕获输入并返回确定性回复。"""
         self.received = inputs
         return AssistantMsg(name="assistant", content="answer")
+
+    async def reply_stream(self, inputs: Msg) -> AsyncIterator[AgentEvent]:
+        """捕获输入并返回确定性的开始事件。"""
+        self.received = inputs
+        yield ReplyStartEvent(
+            session_id="session",
+            reply_id="reply",
+            name="assistant",
+        )
 
 
 @pytest.mark.asyncio
@@ -49,3 +61,23 @@ async def test_reply_rejects_an_empty_user_name() -> None:
 
     with pytest.raises(ValueError, match="user_name"):
         await service.reply("question", user_name="  ")
+
+
+@pytest.mark.asyncio
+async def test_reply_stream_builds_a_named_user_message() -> None:
+    """流式服务应使用同一输入校验并透传 AgentScope 事件。"""
+    agent = FakeAgent()
+    service = ChatService(agent)
+
+    events = [
+        event
+        async for event in service.reply_stream(
+            "  streaming question  ",
+            user_name=" customer ",
+        )
+    ]
+
+    assert agent.received is not None
+    assert agent.received.name == "customer"
+    assert agent.received.get_text_content() == "streaming question"
+    assert len(events) == 1
