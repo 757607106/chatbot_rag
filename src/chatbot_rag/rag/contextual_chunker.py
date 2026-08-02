@@ -9,8 +9,12 @@ from agentscope.rag import Chunk, ChunkerBase, Section
 
 RETRIEVAL_CONTEXT_KEY = "retrieval_context"
 PAGE_CONTEXT_KEY = "page"
+SLIDE_CONTEXT_KEY = "slide"
+SHEET_CONTEXT_KEY = "sheet"
 SOURCE_CONTEXT_LABEL = "文档来源"
 PAGE_CONTEXT_LABEL = "页码"
+SLIDE_CONTEXT_LABEL = "幻灯片"
+SHEET_CONTEXT_LABEL = "工作表"
 
 
 class ContextPreservingChunker(ChunkerBase):  # type: ignore[misc]
@@ -79,6 +83,12 @@ def _build_context(source: str, metadata: dict[str, object]) -> str:
     page = metadata.get(PAGE_CONTEXT_KEY)
     if isinstance(page, int) and not isinstance(page, bool) and page > 0:
         values.append(f"{PAGE_CONTEXT_LABEL}：{page}")
+    slide = metadata.get(SLIDE_CONTEXT_KEY)
+    if isinstance(slide, int) and not isinstance(slide, bool) and slide > 0:
+        values.append(f"{SLIDE_CONTEXT_LABEL}：{slide}")
+    sheet = metadata.get(SHEET_CONTEXT_KEY)
+    if isinstance(sheet, str) and sheet.strip():
+        values.append(f"{SHEET_CONTEXT_LABEL}：{sheet.strip()}")
     retrieval_context = metadata.get(RETRIEVAL_CONTEXT_KEY)
     if isinstance(retrieval_context, str) and retrieval_context.strip():
         values.append(retrieval_context.strip())

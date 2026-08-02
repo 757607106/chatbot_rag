@@ -67,6 +67,9 @@ async for event in ChatService(agent).reply_stream("用户问题"):
 ```
 
 `reply_stream` 返回 AgentScope 2.0.5 原生 `AgentEvent`，只允许协议适配层消费。
+智能体使用 `agentic` RAG：模型仅在判断问题需要项目知识时调用只读
+`search_knowledge`。工具调用、查询参数和检索原文不会进入公共 NDJSON；若检索结果
+含有关联图片，协议层只在内部提取媒体允许列表。
 
 ## RAG 摄取
 
@@ -81,14 +84,16 @@ async with open_knowledge_base(settings) as knowledge_base:
 ```
 
 `IngestionSummary` 分别返回本次建立索引、因内容未变化而跳过，以及从受管目录
-移除后同步删除的文档数量。当前支持 `.md`、`.pdf` 和 `.docx` 文件。Markdown
+移除后同步删除的文档数量。当前支持 `.md`、`.markdown`、`.txt`、`.pdf`、
+`.docx`、`.pptx`、`.xls` 和 `.xlsx` 文件；旧式 `.doc` 和 `.ppt` 不支持。Markdown
 外链图片、Word 内嵌图片及 PDF 页内图片会转换为内部媒体引用并绑定到相邻文本块；
-向量仍由文本生成。摄取管线版本变化或媒体清单缺失时会自动重建对应文档索引。
+PPTX 和 Excel 当前只解析文本与表格，不抽取图片。向量仍由文本生成。摄取管线版本
+变化或媒体清单缺失时会自动重建对应文档索引。
 
 ## RAG 检索与重排序
 
 运行时使用 `CHATBOT_RERANK_CANDIDATE_TOP_K` 控制向量候选数量，默认 `50`；
-`CHATBOT_RAG_TOP_K` 控制重排序后注入生成模型的数量，默认 `5`。候选数量不得小于
+`CHATBOT_RAG_TOP_K` 控制每次工具检索重排序后返回给模型的数量，默认 `5`。候选数量不得小于
 最终数量，且不得超过 qwen3-rerank 单次支持的 `500` 个文档。重排序模型默认由
 `CHATBOT_RERANK_MODEL=qwen3-rerank` 指定，与聊天和嵌入模型共用
 `DASHSCOPE_API_KEY`。

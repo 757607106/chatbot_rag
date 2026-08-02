@@ -15,7 +15,11 @@ from agentscope.event import (
     ReplyFinishedReason,
     ReplyStartEvent,
     TextBlockDeltaEvent,
+    ToolResultEndEvent,
+    ToolResultStartEvent,
+    ToolResultTextDeltaEvent,
 )
+from agentscope.message import ToolResultState
 
 from chatbot_rag.rag import MediaAssetStore
 from chatbot_rag.rag.media_assets import format_media_reference
@@ -226,6 +230,72 @@ async def test_encode_chat_stream_places_retrieved_media_at_reference(
         "<chatbot-media" not in str(event.get("text", ""))
         for event in result
     )
+
+
+@pytest.mark.asyncio
+async def test_encode_chat_stream_allows_media_from_agentic_search_tool(
+    tmp_path: Path,
+) -> None:
+    """Agentic 检索工具返回的媒体标记应建立本轮图片允许列表。"""
+    media_store = MediaAssetStore(tmp_path / "media", ())
+    asset_id = media_store.register_embedded(
+        data=base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
+            "nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+        ),
+        filename="工具检索图片.png",
+        identity="guide.md#agentic-image",
+    )
+    media_store.commit_document("guide.md", {asset_id})
+    media_reference = format_media_reference(asset_id)
+
+    result = await _decode(
+        _events(
+            ReplyStartEvent(
+                session_id="session",
+                reply_id="reply",
+                name="assistant",
+            ),
+            ToolResultStartEvent(
+                reply_id="reply",
+                tool_call_id="search-call",
+                tool_call_name="search_knowledge",
+            ),
+            ToolResultTextDeltaEvent(
+                reply_id="reply",
+                tool_call_id="search-call",
+                delta=f"相关说明\n{media_reference[:27]}",
+            ),
+            ToolResultTextDeltaEvent(
+                reply_id="reply",
+                tool_call_id="search-call",
+                delta=media_reference[27:],
+            ),
+            ToolResultEndEvent(
+                reply_id="reply",
+                tool_call_id="search-call",
+                state=ToolResultState.SUCCESS,
+            ),
+            TextBlockDeltaEvent(
+                reply_id="reply",
+                block_id="text",
+                delta=f"按照图示完成配置。{media_reference}",
+            ),
+            ReplyEndEvent(
+                session_id="session",
+                reply_id="reply",
+            ),
+        ),
+        media_store=media_store,
+    )
+
+    assert [event["type"] for event in result] == [
+        "message_start",
+        "text_delta",
+        "image_part",
+        "message_end",
+    ]
+    assert result[2]["url"] == f"/api/media/{asset_id}"
 
 
 @pytest.mark.asyncio

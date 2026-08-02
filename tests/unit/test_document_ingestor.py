@@ -5,16 +5,21 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from openpyxl import Workbook  # type: ignore[import-untyped]
+from pptx import Presentation
 from agentscope.message import TextBlock
 from agentscope.rag import (
     ApproxTokenChunker,
     Chunk,
     DocumentSummary,
+    ExcelParser,
     KnowledgeBase,
+    PPTParser,
     TextParser,
 )
 
 from chatbot_rag.rag import (
+    ContextPreservingChunker,
     DocumentIngestor,
     IngestionStage,
     MediaAssetStore,
@@ -207,7 +212,7 @@ async def test_ingest_directory_commits_retrievable_media_manifest(
     tmp_path: Path,
 ) -> None:
     """摄取完成后应同时提交索引媒体标记和文档图片清单。"""
-    document_path = tmp_path / "guide.md"
+    document_path = tmp_path / "guide.markdown"
     document_path.write_text(
         "打开设置。\n\n"
         "![设置页面](https://images.example.com/setting.png)",
@@ -235,6 +240,92 @@ async def test_ingest_directory_commits_retrievable_media_manifest(
         for asset_id in extract_media_asset_ids(chunk.content.text)
     ]
     assert len(asset_ids) == 1
-    assert media_store.has_document("guide.md") is True
+    assert media_store.has_document("guide.markdown") is True
     assert metadata is not None
     assert metadata[INGESTION_PIPELINE_KEY] == INGESTION_PIPELINE_VERSION
+
+
+def test_default_parsers_register_expected_document_extensions(
+    tmp_path: Path,
+) -> None:
+    """默认摄取器应登记全部已承诺支持的文档扩展名。"""
+    ingestor = DocumentIngestor(
+        knowledge_base=cast(KnowledgeBase, FakeKnowledgeBase()),
+        chunker=ApproxTokenChunker(),
+    )
+    expected_extensions = {
+        ".docx",
+        ".md",
+        ".markdown",
+        ".pdf",
+        ".pptx",
+        ".txt",
+        ".xls",
+        ".xlsx",
+    }
+    for extension in expected_extensions:
+        (tmp_path / f"document{extension}").write_bytes(b"placeholder")
+    (tmp_path / "legacy.doc").write_bytes(b"placeholder")
+    (tmp_path / "legacy.ppt").write_bytes(b"placeholder")
+
+    supported_files = ingestor._iter_supported_files(tmp_path)
+
+    assert {path.suffix.lower() for path in supported_files} == (
+        expected_extensions
+    )
+    powerpoint_parser = cast(PPTParser, ingestor._parsers[".pptx"])
+    excel_parser = cast(ExcelParser, ingestor._parsers[".xlsx"])
+    assert powerpoint_parser.include_image is False
+    assert excel_parser.include_image is False
+    assert excel_parser.separate_sheet is True
+    assert ingestor._parsers[".xls"] is excel_parser
+
+
+@pytest.mark.asyncio
+async def test_default_parsers_ingest_txt_pptx_and_xlsx(
+    tmp_path: Path,
+) -> None:
+    """TXT、PPTX 和 XLSX 应通过 AgentScope 原生 Parser 完成摄取。"""
+    (tmp_path / "notes.txt").write_text("纯文本知识", encoding="utf-8")
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+    slide.shapes.title.text = "部署说明"
+    slide.placeholders[1].text = "服务需要先完成配置。"
+    presentation.save(tmp_path / "deployment.pptx")
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "产品清单"
+    worksheet.append(["产品", "状态"])
+    worksheet.append(["知识助手", "可用"])
+    workbook.save(tmp_path / "products.xlsx")
+    workbook.close()
+
+    knowledge_base = FakeKnowledgeBase()
+    summary = await DocumentIngestor(
+        knowledge_base=cast(KnowledgeBase, knowledge_base),
+        chunker=ContextPreservingChunker(
+            ApproxTokenChunker(chunk_size=128, overlap=16),
+        ),
+    ).ingest_directory(tmp_path)
+
+    assert summary.indexed_documents == 3
+    chunks_by_source = {
+        cast(str, metadata["source_path"]): chunks
+        for chunks, _, metadata in knowledge_base.inserted
+        if metadata is not None
+    }
+    text_by_source = {
+        source: "\n".join(
+            chunk.content.text
+            for chunk in chunks
+            if isinstance(chunk.content, TextBlock)
+        )
+        for source, chunks in chunks_by_source.items()
+    }
+    assert "纯文本知识" in text_by_source["notes.txt"]
+    assert "幻灯片：1" in text_by_source["deployment.pptx"]
+    assert "部署说明" in text_by_source["deployment.pptx"]
+    assert "工作表：产品清单" in text_by_source["products.xlsx"]
+    assert "知识助手" in text_by_source["products.xlsx"]

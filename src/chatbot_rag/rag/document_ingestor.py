@@ -15,9 +15,11 @@ from agentscope.rag import (
     Chunk,
     ChunkerBase,
     DocumentSummary,
+    ExcelParser,
     KnowledgeBase,
     ParserBase,
     PDFParser,
+    PPTParser,
     TextParser,
     WordParser,
 )
@@ -87,18 +89,37 @@ class DocumentIngestor:
         self._chunker = chunker
         self._media_store = media_store
         if parsers is None:
+            text_parser = TextParser()
+            powerpoint_parser = PPTParser(
+                include_image=False,
+                separate_table=False,
+                table_format="markdown",
+            )
+            excel_parser = ExcelParser(
+                include_sheet_names=True,
+                include_cell_coordinates=False,
+                include_image=False,
+                separate_sheet=True,
+                table_format="markdown",
+            )
             if media_store is None:
-                parsers = {
-                    ".md": TextParser(),
-                    ".pdf": PDFParser(),
-                    ".docx": WordParser(include_image=False),
-                }
+                markdown_parser: ParserBase = text_parser
+                pdf_parser: ParserBase = PDFParser()
+                word_parser: ParserBase = WordParser(include_image=False)
             else:
-                parsers = {
-                    ".md": MarkdownMediaParser(media_store),
-                    ".pdf": PDFMediaParser(media_store),
-                    ".docx": WordMediaParser(media_store),
-                }
+                markdown_parser = MarkdownMediaParser(media_store)
+                pdf_parser = PDFMediaParser(media_store)
+                word_parser = WordMediaParser(media_store)
+            parsers = {
+                ".docx": word_parser,
+                ".md": markdown_parser,
+                ".markdown": markdown_parser,
+                ".pdf": pdf_parser,
+                ".pptx": powerpoint_parser,
+                ".txt": text_parser,
+                ".xls": excel_parser,
+                ".xlsx": excel_parser,
+            }
         self._parsers = dict(parsers)
 
     async def ingest_directory(

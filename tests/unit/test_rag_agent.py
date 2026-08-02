@@ -2,18 +2,21 @@
 
 from typing import Any, cast
 
+import pytest
 from agentscope.rag import KnowledgeBase
 
 from chatbot_rag.agents import rag_agent
 from chatbot_rag.config import Settings
 
 
-def test_create_rag_agent_uses_static_rag_middleware(
+@pytest.mark.asyncio
+async def test_create_rag_agent_uses_agentic_rag_tool(
     monkeypatch: Any,
 ) -> None:
-    """智能体应使用固定检索模式的 AgentScope RAG 中间件。"""
+    """智能体应让模型通过官方工具自主决定是否检索知识库。"""
     captured: dict[str, object] = {}
     model = object()
+    search_tool = object()
     knowledge_base = cast(KnowledgeBase, object())
 
     class FakeRagMiddleware:
@@ -30,15 +33,27 @@ def test_create_rag_agent_uses_static_rag_middleware(
             """记录传入的知识库和参数对象。"""
             captured["rag_middleware"] = kwargs
 
+        async def list_tools(self) -> list[object]:
+            """返回用于验证注册行为的检索工具替身。"""
+            return [search_tool]
+
+    class FakeToolkit:
+        """捕获注入智能体的工具列表。"""
+
+        def __init__(self, **kwargs: object) -> None:
+            """记录工具集构造参数。"""
+            captured["toolkit"] = kwargs
+
     def fake_agent(**kwargs: object) -> object:
         captured["agent"] = kwargs
         return object()
 
     monkeypatch.setattr(rag_agent, "Agent", fake_agent)
     monkeypatch.setattr(rag_agent, "RAGMiddleware", FakeRagMiddleware)
+    monkeypatch.setattr(rag_agent, "Toolkit", FakeToolkit)
     monkeypatch.setattr(rag_agent, "create_chat_model", lambda settings: model)
 
-    rag_agent.create_rag_agent(
+    await rag_agent.create_rag_agent(
         Settings(dashscope_api_key="secret", rag_top_k=7),
         knowledge_base,
     )
@@ -52,15 +67,18 @@ def test_create_rag_agent_uses_static_rag_middleware(
     assert agent_kwargs["name"] == "rag_assistant"
     assert middleware_kwargs["knowledge_bases"] == [knowledge_base]
     assert agent_kwargs["middlewares"]
+    assert agent_kwargs["toolkit"].__class__ is FakeToolkit
+    assert captured["toolkit"] == {"tools": [search_tool]}
     assert captured["rag_parameters"] == {
-        "mode": "static",
+        "mode": "agentic",
         "top_k": 7,
-        "persist_hint": False,
     }
     system_prompt = cast(str, agent_kwargs["system_prompt"])
+    assert "必须先调用 `search_knowledge`" in system_prompt
+    assert "明确与知识库无关" in system_prompt
     assert "任一条件冲突的证据都不得用于回答" in system_prompt
     assert "不得把来自不同适用范围的片段拼成" in system_prompt
-    assert "检索内容已经按问题相关性降序排列" in system_prompt
+    assert "工具结果已经按问题相关性降序排列" in system_prompt
     assert "禁止把全部标记集中到回答末尾" in system_prompt
     assert "对应说明段落或列表项之后" in system_prompt
     assert "本地、Web" not in system_prompt

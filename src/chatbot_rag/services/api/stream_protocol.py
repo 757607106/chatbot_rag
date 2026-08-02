@@ -14,6 +14,9 @@ from agentscope.event import (
     ReplyFinishedReason,
     ReplyStartEvent,
     TextBlockDeltaEvent,
+    ToolResultEndEvent,
+    ToolResultStartEvent,
+    ToolResultTextDeltaEvent,
 )
 from agentscope.message import TextBlock
 from pydantic import BaseModel
@@ -37,6 +40,7 @@ _MEDIA_REFERENCE_OPENING = '<chatbot-media asset-id="'
 _MEDIA_REFERENCE_CLOSING = '" />'
 _MEDIA_REFERENCE_TAG = "<chatbot-media"
 _HEX_DIGITS = frozenset("0123456789abcdef")
+_KNOWLEDGE_SEARCH_TOOL_NAME = "search_knowledge"
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +137,7 @@ async def encode_chat_stream(
     allowed_media_asset_ids: set[str] = set()
     emitted_media_asset_ids: set[str] = set()
     inline_media_parser = _InlineMediaParser()
+    knowledge_tool_media_parsers: dict[str, _InlineMediaParser] = {}
 
     try:
         async for event in events:
@@ -166,6 +171,36 @@ async def encode_chat_stream(
                 yield _encode_event(
                     ChatMessageStartEvent(message_id=message_id),
                 )
+                continue
+
+            if isinstance(event, ToolResultStartEvent):
+                if message_id is None or event.reply_id != message_id:
+                    yield _encode_event(_protocol_error())
+                    return
+                if event.tool_call_name == _KNOWLEDGE_SEARCH_TOOL_NAME:
+                    knowledge_tool_media_parsers[event.tool_call_id] = (
+                        _InlineMediaParser()
+                    )
+                continue
+
+            if isinstance(event, ToolResultTextDeltaEvent):
+                if message_id is None or event.reply_id != message_id:
+                    yield _encode_event(_protocol_error())
+                    return
+                parser = knowledge_tool_media_parsers.get(event.tool_call_id)
+                if parser is not None:
+                    allowed_media_asset_ids.update(
+                        part.asset_id
+                        for part in parser.feed(event.delta)
+                        if isinstance(part, _MediaReference)
+                    )
+                continue
+
+            if isinstance(event, ToolResultEndEvent):
+                if message_id is None or event.reply_id != message_id:
+                    yield _encode_event(_protocol_error())
+                    return
+                knowledge_tool_media_parsers.pop(event.tool_call_id, None)
                 continue
 
             if isinstance(event, TextBlockDeltaEvent):

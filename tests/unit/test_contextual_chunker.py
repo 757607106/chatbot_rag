@@ -88,3 +88,37 @@ async def test_chunker_adds_page_context_for_paginated_document() -> None:
     assert chunks[0].content.text == (
         "文档来源：manual.pdf\n页码：7\n\n分页文档内容"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "expected_context"),
+    [
+        ({"slide": 3}, "幻灯片：3"),
+        ({"sheet": "产品清单"}, "工作表：产品清单"),
+    ],
+)
+async def test_chunker_adds_office_document_scope(
+    metadata: dict[str, object],
+    expected_context: str,
+) -> None:
+    """PPT 和 Excel 文本块应保留幻灯片或工作表范围。"""
+    chunker = ContextPreservingChunker(
+        ApproxTokenChunker(chunk_size=32, overlap=4),
+    )
+
+    chunks = await chunker.chunk(
+        [
+            Section(
+                content=TextBlock(text="办公文档内容"),
+                source="office-document",
+                metadata=metadata,
+            ),
+        ],
+    )
+
+    assert len(chunks) == 1
+    assert isinstance(chunks[0].content, TextBlock)
+    assert chunks[0].content.text == (
+        f"文档来源：office-document\n{expected_context}\n\n办公文档内容"
+    )

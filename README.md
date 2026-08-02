@@ -32,16 +32,23 @@ export CHATBOT_REMOTE_IMAGE_HOSTS="alidocs.oss-cn-zhangjiakou.aliyuncs.com"
 export CHATBOT_QDRANT_PATH=".data/qdrant"
 ```
 
-应用默认递归读取 `tests/docs_test` 中的 `.md`、`.pdf` 和 `.docx` 文件，使用
-DashScope Embedding 建立索引，并持久化到本地 Qdrant。每个文本块会携带文档来源、
-可用的标题路径或页码；查询时先召回 50 个向量候选，再由 `qwen3-rerank` 按问题的
-全部显式条件精排后向模型提供最终 Top 5。内容未变化的文件会
-跳过重复索引，`.ipynb` 等不支持的格式会被忽略。Markdown 外链图片、Word
-内嵌图片和 PDF 页内图片会登记到媒体仓库，并在回答采用关联文本时紧跟对应说明显示，
-不会把全部检索图片统一堆到消息末尾。
+应用默认递归读取 `tests/docs_test` 中的 `.md`、`.markdown`、`.txt`、`.pdf`、
+`.docx`、`.pptx`、`.xls` 和 `.xlsx` 文件，使用 DashScope Embedding 建立索引，
+并持久化到本地 Qdrant。每个文本块会携带文档来源；Markdown 保留标题路径，PDF
+保留页码，PPTX 保留幻灯片序号，Excel 保留工作表名。查询时先召回 50 个向量候选，
+再由 `qwen3-rerank` 按问题的全部显式条件精排后向模型提供最终 Top 5。内容未变化的
+文件会跳过重复索引，旧式 `.doc`、`.ppt` 及 `.ipynb` 等不支持的格式会被忽略。
+Markdown 外链图片、Word 内嵌图片和 PDF 页内图片会登记到媒体仓库，并在回答采用
+关联文本时紧跟对应说明显示，不会把全部检索图片统一堆到消息末尾。PPTX 和 Excel
+当前只索引文本与表格，不抽取其中的图片。
 远程 Qdrant 可通过
 `CHATBOT_QDRANT_URL` 和
 `CHATBOT_QDRANT_API_KEY` 配置。
+
+智能体使用 AgentScope `RAGMiddleware` 的 `agentic` 模式，并把官方
+`search_knowledge` 注册到 `Toolkit`。涉及项目资料、产品功能和操作步骤的问题由模型
+自主调用知识库检索；明确无关的通用问答、写作或翻译任务不执行 Embedding、Qdrant
+和重排序。知识库相关问题检索无结果时必须明确拒答，不得用模型常识补全私有事实。
 
 ## 启动 Web 对话
 

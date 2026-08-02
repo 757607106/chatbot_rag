@@ -2,6 +2,12 @@
 
 ## 未发布
 
+- 将 AgentScope `RAGMiddleware` 从 `static` 切换为 `agentic`，注册官方
+  `search_knowledge` 工具，由模型判断是否需要项目知识并改写自包含查询；通用任务不再
+  固定执行检索。协议层从内部工具结果建立图片允许列表，但不向浏览器公开工具参数或原文。
+- 扩展默认文档摄取范围，新增 `.markdown`、`.txt`、`.pptx`、`.xls` 和 `.xlsx`；
+  PPTX 文本块保留幻灯片序号，Excel 按工作表拆分并保留工作表名。PPTX 和 Excel
+  暂只索引文本与表格，不抽取图片进入文本 Embedding 链路。
 - 系统性修复检索范围丢失和冲突内容混答：Markdown 按标题建立自然章节，所有格式的
   Chunk 保留文档来源，PDF 同时保留页码；查询移除说话人标签后召回 50 个候选，再由
   qwen3-rerank 按全部显式条件精排为最终 Top 5，且不补回未经精排的候选。

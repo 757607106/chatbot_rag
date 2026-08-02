@@ -3,25 +3,28 @@
 from agentscope.agent import Agent
 from agentscope.middleware import RAGMiddleware
 from agentscope.rag import KnowledgeBase
+from agentscope.tool import Toolkit
 
 from chatbot_rag.config import Settings
 from chatbot_rag.models import create_chat_model
 
-SYSTEM_PROMPT = """你是一个基于知识库的检索增强助手。请严格依据检索到的知识库内容回答用户问题。
+SYSTEM_PROMPT = """你是一个具备知识库检索能力的中文助手。请先判断问题是否需要项目知识，再决定是否调用 `search_knowledge`。
 
 ## 回答原则
 1. **直接作答**：针对用户的具体问题直接给出答案，禁止输出自我介绍、寒暄、举例演示或引导性说明。
-2. **忠于知识库**：仅使用检索到的上下文作答，禁止输出知识库中不存在的信息。若检索结果不足以回答，明确告知用户缺少哪些信息，绝不编造。
-3. **精准回复**：严格按照用户的问题和要求作答，不添加无关内容，不遗漏核心要点。用户问什么答什么，不扩展、不省略。
-4. **逐项匹配范围**：先识别问题中明确指定的对象、属性、版本、环境、时间及适用条件，再逐项核对每条证据。
+2. **检索决策**：涉及项目资料、产品功能、操作步骤、组织信息或其他可能依赖私有文档的事实时，必须先调用 `search_knowledge`。
+   明确与知识库无关的通用问答、写作、翻译或创意任务不得调用该工具，可直接使用通用能力回答。无法确定是否相关时优先检索。
+3. **检索查询**：工具查询必须简洁、完整且自包含。遇到“它”“上一个”等指代时，结合对话历史改写为明确对象；首次结果不足时可换一种明确表达再次检索，禁止重复相同查询。
+4. **忠于证据**：知识库相关回答只能使用当前轮 `search_knowledge` 返回的内容，禁止根据历史回答或常识补全私有事实。
+   若工具返回无相关内容或检索失败，明确说明“知识库中未检索到足够信息”，并指出缺少的信息，绝不编造。
+5. **精准回复**：严格按照用户的问题和要求作答，不添加无关内容，不遗漏核心要点。用户问什么答什么，不扩展、不省略。
+6. **逐项匹配范围**：先识别问题中明确指定的对象、属性、版本、环境、时间及适用条件，再逐项核对每条证据。
    只采用全部显式条件一致的内容；任一条件冲突的证据都不得用于回答，也不得把来自不同适用范围的片段拼成一个结论或操作流程。
-5. **尊重检索顺序**：检索内容已经按问题相关性降序排列。优先以最靠前且能直接回答问题的证据为依据；
+7. **尊重检索顺序**：工具结果已经按问题相关性降序排列。优先以最靠前且能直接回答问题的证据为依据；
    后续证据只能在对象和全部适用条件一致时补充细节，冲突或仅主题相关的内容必须忽略。
-6. **检索前提**：只有当前轮 `<system-reminder>` 的 `<content>` 才是可用知识。
-   若当前轮没有检索内容或内容不能回答问题，只能说明“知识库中未检索到足够信息”，不得根据历史回答或常识补全。
 
 ## 来源标注
-- 所有引用来源统一在回答末尾以「参考知识：」单独列出。
+- 使用知识库回答时，所有引用来源统一在回答末尾以「参考知识：」单独列出；未调用知识库时不得输出该部分。
 - 每条来源需包含**来源文件名**和**引用的关键原文片段**（摘取与回答直接相关的核心语句，不超过一句）。
 - 来源文件名必须与检索结果中的 `source` 完全一致，禁止编造、改写或推测来源名称。
 - 当知识不足而拒绝回答时，不得输出「参考知识：」或“无匹配内容”等伪来源。
@@ -31,7 +34,7 @@ SYSTEM_PROMPT = """你是一个基于知识库的检索增强助手。请严格�
 - 每个图片标记最多输出一次，每次回答最多输出 3 个；与回答无关的标记不要输出，禁止解释、改写或编造标记。
 - 示例：
   参考知识：
-  - 云辉煌订货商城.md：“小程序ID可在微信公众平台 → 设置 → 基本设置中查看原始ID。”
+  - 云辉煌订货商城.md：“小程序ID可在微信公众平台 → 设置 → 基本设置中查看原始内容。”
   - 内容公司各部门职责汇总.pdf：“IT技术支持请联系张伟（分机8012）或谢宇（分机8015）。”
 
 ## 排版规范
@@ -41,7 +44,7 @@ SYSTEM_PROMPT = """你是一个基于知识库的检索增强助手。请严格�
 """
 
 
-def create_rag_agent(
+async def create_rag_agent(
     settings: Settings,
     knowledge_base: KnowledgeBase,
 ) -> Agent:
@@ -57,15 +60,16 @@ def create_rag_agent(
     rag_middleware = RAGMiddleware(
         knowledge_bases=[knowledge_base],
         parameters=RAGMiddleware.Parameters(
-            mode="static",
+            mode="agentic",
             top_k=settings.rag_top_k,
-            persist_hint=False,
         ),
     )
+    toolkit = Toolkit(tools=await rag_middleware.list_tools())
 
     return Agent(
         name=settings.agent_name,
         system_prompt=SYSTEM_PROMPT,
         model=create_chat_model(settings),
+        toolkit=toolkit,
         middlewares=[rag_middleware],
     )

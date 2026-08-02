@@ -67,15 +67,21 @@ registry 组件是可定制源码，但通用组件不得直接 `fetch`，业务
 索引：文件 -> Parser -> ContextPreservingChunker(ApproxTokenChunker)
     -> DashScopeEmbeddingModel -> QdrantStore
 
-查询：清理说话人前缀 -> Qdrant 向量候选 Top 50 -> qwen3-rerank -> 最终 Top 5
-    -> RAGMiddleware HintBlock -> Agent
+查询：Agent 判断问题是否需要项目知识 -> search_knowledge
+    -> 清理查询前缀 -> Qdrant 向量候选 Top 50 -> qwen3-rerank -> 最终 Top 5
+    -> 工具结果 -> Agent
+
+通用任务：Agent 判断与知识库无关 -> 不调用 search_knowledge -> 直接生成
 ```
 
 Markdown 解析器以标题作为 `Section` 自然边界，图片只转换为原位内部引用，不再创建
 人为章节边界。解析器把完整标题路径写入章节元数据，`ContextPreservingChunker` 在
 `ApproxTokenChunker` 执行长度切分前后为每个文本块补充文档来源和该路径；Word 文本
-至少保留来源，PDF 文本同时保留来源与页码。因此所有格式的 Chunk 脱离前后文后仍有
-稳定范围，不依赖生成模型猜测它属于哪个文档或章节。
+和 TXT 至少保留来源，PDF 文本同时保留来源与页码，PPTX 保留幻灯片序号，Excel 按
+工作表建立自然边界并保留工作表名。因此所有格式的 Chunk 脱离前后文后仍有稳定范围，
+不依赖生成模型猜测它属于哪个文档、章节、幻灯片或工作表。PPTX 和 Excel 当前使用
+AgentScope 原生 Parser 读取文本与表格，并显式关闭图片抽取，避免文本 Embedding
+接收未经过媒体资产边界处理的多模态块。
 
 索引以相对路径和文件内容摘要生成稳定的文档版本标识。启动时跳过未变化的
 文件；内容变化时先写入新版本，再删除同一路径的旧版本，避免正常重试产生
@@ -96,8 +102,12 @@ Markdown 解析器以标题作为 `Section` 自然边界，图片只转换为原
 
 当前使用 AgentScope 2.0.5 原生 RAG，而不引入 LlamaIndex。开发环境默认使用
 本地持久化 Qdrant，生产环境可通过相同的 `QdrantStore` 切换到远程服务。
-智能体先采用 `static` 检索模式，保证每个问题在首次推理前获得知识上下文；
-需要让模型自主决定检索时，再作为独立行为变更评估 `agentic` 模式。
+智能体采用 `agentic` 检索模式，将 `RAGMiddleware.list_tools()` 返回的官方
+`search_knowledge` 注册到 `Toolkit`。涉及项目资料、产品功能、操作步骤和私有事实的
+问题必须先检索；明确无关的通用问答、写作、翻译和创意任务不检索。指代型问题由模型
+结合对话历史改写为自包含查询，结果不足时可换一种明确表达再次检索。该模式减少无关
+问题的 Embedding、Qdrant 和重排序开销，但是否检索依赖模型遵循工具使用契约，因此
+需要用知识库问题与无关问题两类用例持续评估工具调用决策。
 
 当前已实现单会话文本与文档图片流式竖切片：FastAPI 把 AgentScope 事件转换为版本 2
 NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累积文本及
@@ -116,14 +126,15 @@ NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累
 
 ## 文档图片数据流
 
-`Markdown/Word/PDF -> 媒体感知 Parser -> MediaAssetStore + 文本媒体标记 -> 文本 Embedding -> Qdrant -> RAGMiddleware HintBlockEvent -> Agent 原位引用 -> Web image_part -> ImageMessagePart`
+`Markdown/Word/PDF -> 媒体感知 Parser -> MediaAssetStore + 文本媒体标记 -> 文本 Embedding -> Qdrant -> search_knowledge 工具结果 -> Agent 原位引用 -> Web image_part -> ImageMessagePart`
 
 图片二进制不进入文本 embedding 或 NDJSON。内嵌图片持久化到配置的媒体目录；远程
 图片只登记允许主机上的 HTTPS 地址并按需缓存。每个源文档维护图片清单，文档删除或
 图片减少后清理无引用资产。内部 `<chatbot-media>` 标记只用于把检索命中的文本块与
 图片资产关联。模型仅在采用相邻证据时把原标记放到对应说明之后；协议层跨文本增量
-解析标记，只有标记属于本轮检索结果时才原位转换为受控同源 URL，并对重复、编造和
-超量标记执行过滤。原始内部标记不会进入浏览器，未被回答引用的图片也不会在末尾追加。
+解析标记，并从 `search_knowledge` 的内部工具结果事件建立本轮允许列表。只有标记属于
+本轮检索结果时才原位转换为受控同源 URL，并对重复、编造和超量标记执行过滤；工具
+参数、检索原文和内部标记不会进入浏览器，未被回答引用的图片也不会在末尾追加。
 
 图片检索采用“文本召回、相邻图片随块返回”，保持现有 `text-embedding-v4`、
 `qwen3-rerank` 和 Qdrant collection，不为图片单独生成向量。需要按视觉内容搜索图片时，

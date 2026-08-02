@@ -71,6 +71,6 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
             media_store=media_store,
         ).ingest_directory(settings.documents_path)
         app.state.chat_service = ChatService(
-            create_rag_agent(settings, knowledge_base),
+            await create_rag_agent(settings, knowledge_base),
         )
         yield
