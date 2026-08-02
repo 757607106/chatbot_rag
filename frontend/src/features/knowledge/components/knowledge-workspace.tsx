@@ -45,9 +45,6 @@ export function KnowledgeWorkspace() {
     () => (selectedKnowledgeBaseId === null ? null : { knowledgeBaseId: selectedKnowledgeBaseId }),
     [selectedKnowledgeBaseId],
   );
-  const selectedKnowledgeBase =
-    knowledgeBases.find((item) => item.knowledge_base_id === selectedKnowledgeBaseId) ?? null;
-
   const handleApiError = useCallback((caught: unknown) => {
     setError(caught instanceof Error ? caught.message : "知识库操作失败。");
   }, []);
