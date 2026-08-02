@@ -10,9 +10,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
 
-[project.scripts]
-chatbot-rag = "chatbot_rag.main:main"
-
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
 
