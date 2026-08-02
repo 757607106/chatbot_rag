@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from agentscope.message import TextBlock
 from agentscope.rag import (
     ApproxTokenChunker,
     Chunk,
@@ -13,7 +14,16 @@ from agentscope.rag import (
     TextParser,
 )
 
-from chatbot_rag.rag import DocumentIngestor, IngestionStage
+from chatbot_rag.rag import (
+    DocumentIngestor,
+    IngestionStage,
+    MediaAssetStore,
+)
+from chatbot_rag.rag.media_assets import extract_media_asset_ids
+from chatbot_rag.rag.document_ingestor import (
+    INGESTION_PIPELINE_KEY,
+    INGESTION_PIPELINE_VERSION,
+)
 
 
 class FakeKnowledgeBase:
@@ -113,6 +123,7 @@ async def test_ingest_directory_skips_unchanged_document(
                 metadata={
                     "source_path": "guide.md",
                     "content_sha256": hashlib.sha256(content).hexdigest(),
+                    INGESTION_PIPELINE_KEY: INGESTION_PIPELINE_VERSION,
                 },
             ),
         ],
@@ -189,3 +200,41 @@ async def test_ingest_directory_rejects_missing_directory(
         await _create_ingestor(FakeKnowledgeBase()).ingest_directory(
             missing_path,
         )
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_commits_retrievable_media_manifest(
+    tmp_path: Path,
+) -> None:
+    """摄取完成后应同时提交索引媒体标记和文档图片清单。"""
+    document_path = tmp_path / "guide.md"
+    document_path.write_text(
+        "打开设置。\n\n"
+        "![设置页面](https://images.example.com/setting.png)",
+        encoding="utf-8",
+    )
+    media_store = MediaAssetStore(
+        tmp_path / "media",
+        ("images.example.com",),
+    )
+    knowledge_base = FakeKnowledgeBase()
+    ingestor = DocumentIngestor(
+        knowledge_base=cast(KnowledgeBase, knowledge_base),
+        chunker=ApproxTokenChunker(chunk_size=32, overlap=4),
+        media_store=media_store,
+    )
+
+    summary = await ingestor.ingest_directory(tmp_path)
+
+    assert summary.indexed_documents == 1
+    chunks, _, metadata = knowledge_base.inserted[0]
+    asset_ids = [
+        asset_id
+        for chunk in chunks
+        if isinstance(chunk.content, TextBlock)
+        for asset_id in extract_media_asset_ids(chunk.content.text)
+    ]
+    assert len(asset_ids) == 1
+    assert media_store.has_document("guide.md") is True
+    assert metadata is not None
+    assert metadata[INGESTION_PIPELINE_KEY] == INGESTION_PIPELINE_VERSION

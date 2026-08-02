@@ -10,13 +10,13 @@ describe("readChatStream", () => {
       start(controller) {
         controller.enqueue(
           encoder.encode(
-            '{"version":1,"type":"message_start","message_id":"reply"}\n' +
-              '{"version":1,"type":"text_delta","message_id":"reply","te',
+            '{"version":2,"type":"message_start","message_id":"reply"}\n' +
+              '{"version":2,"type":"text_delta","message_id":"reply","te',
           ),
         );
         controller.enqueue(
           encoder.encode(
-            'xt":"你好"}\n{"version":1,"type":"message_end","message_id":"reply","finish_reason":"completed"}\n',
+            'xt":"你好"}\n{"version":2,"type":"message_end","message_id":"reply","finish_reason":"completed"}\n',
           ),
         );
         controller.close();
@@ -38,7 +38,7 @@ describe("readChatStream", () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(
-          encoder.encode('{"version":2,"type":"message_start","message_id":"reply"}\n'),
+          encoder.encode('{"version":99,"type":"message_start","message_id":"reply"}\n'),
         );
         controller.close();
       },
@@ -51,5 +51,39 @@ describe("readChatStream", () => {
     };
 
     await expect(consume()).rejects.toBeInstanceOf(ChatStreamProtocolError);
+  });
+
+  it("只接受同源媒体 BFF 图片地址", async () => {
+    const validId = "b".repeat(64);
+    const validBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `{"version":2,"type":"image_part","message_id":"reply","url":"/api/media/${validId}","filename":"步骤.png"}\n`,
+          ),
+        );
+        controller.close();
+      },
+    });
+    const validEvents = [];
+    for await (const event of readChatStream(validBody)) validEvents.push(event);
+    expect(validEvents[0]).toMatchObject({ type: "image_part", filename: "步骤.png" });
+
+    const unsafeBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            '{"version":2,"type":"image_part","message_id":"reply","url":"https://evil.example/image.png","filename":"图片.png"}\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    const consumeUnsafe = async () => {
+      for await (const _event of readChatStream(unsafeBody)) {
+        // 测试只需驱动解析器执行边界校验。
+      }
+    };
+    await expect(consumeUnsafe()).rejects.toBeInstanceOf(ChatStreamProtocolError);
   });
 });

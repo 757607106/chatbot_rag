@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
-const DEFAULT_CHATBOT_API_URL = "http://127.0.0.1:8000/api/v1/chat/stream";
+import { getChatUpstreamUrl } from "@/app/api/chatbot-upstream";
 
 export async function POST(request: Request): Promise<Response> {
-  const upstreamUrl = process.env.CHATBOT_API_URL ?? DEFAULT_CHATBOT_API_URL;
+  const upstreamUrl = getChatUpstreamUrl();
 
   try {
     const response = await fetch(upstreamUrl, {

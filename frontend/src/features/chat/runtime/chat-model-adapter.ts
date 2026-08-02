@@ -1,4 +1,9 @@
-import type { ChatModelAdapter, ChatModelRunResult, ThreadMessage } from "@assistant-ui/react";
+import type {
+  ChatModelAdapter,
+  ChatModelRunResult,
+  ThreadAssistantMessagePart,
+  ThreadMessage,
+} from "@assistant-ui/react";
 
 import { readChatStream } from "@/features/chat/api/read-chat-stream";
 
@@ -34,7 +39,8 @@ export async function* streamAssistantReply(
     }
 
     let messageId: string | null = null;
-    let accumulatedText = "";
+    const content: ThreadAssistantMessagePart[] = [];
+    let textPartIndex: number | null = null;
     let completed = false;
 
     for await (const event of readChatStream(response.body)) {
@@ -55,22 +61,46 @@ export async function* streamAssistantReply(
       }
 
       if (event.type === "text_delta") {
-        accumulatedText += event.text;
-        if (accumulatedText) {
-          yield {
-            content: [{ type: "text", text: accumulatedText }],
+        if (!event.text) continue;
+        if (textPartIndex === null) {
+          textPartIndex = content.length;
+          content.push({ type: "text", text: event.text });
+        } else {
+          const current = content[textPartIndex];
+          if (current?.type !== "text") {
+            throw new ChatRequestError("回复流中的文本状态无效。");
+          }
+          content[textPartIndex] = {
+            type: "text",
+            text: current.text + event.text,
           };
         }
+        yield {
+          content: [...content],
+        };
         continue;
       }
 
-      completed = true;
+      if (event.type === "image_part") {
+        content.push({
+          type: "image",
+          image: event.url,
+          filename: event.filename,
+        });
+        textPartIndex = null;
+        yield { content: [...content] };
+        continue;
+      }
+
+      if (event.type === "message_end") {
+        completed = true;
+      }
     }
 
     if (!completed) {
       throw new ChatRequestError("回复流未正常完成，请重试。");
     }
-    if (!accumulatedText) {
+    if (content.length === 0) {
       throw new ChatRequestError("助手未返回可显示的内容。");
     }
   } catch (error) {

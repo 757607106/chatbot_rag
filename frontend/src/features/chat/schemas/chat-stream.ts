@@ -1,4 +1,4 @@
-export const CHAT_PROTOCOL_VERSION = 1 as const;
+export const CHAT_PROTOCOL_VERSION = 2 as const;
 
 export type ChatMessageStartEvent = {
   version: typeof CHAT_PROTOCOL_VERSION;
@@ -11,6 +11,14 @@ export type ChatTextDeltaEvent = {
   type: "text_delta";
   message_id: string;
   text: string;
+};
+
+export type ChatImagePartEvent = {
+  version: typeof CHAT_PROTOCOL_VERSION;
+  type: "image_part";
+  message_id: string;
+  url: string;
+  filename: string;
 };
 
 export type ChatMessageEndEvent = {
@@ -30,5 +38,6 @@ export type ChatErrorEvent = {
 export type ChatStreamEvent =
   | ChatMessageStartEvent
   | ChatTextDeltaEvent
+  | ChatImagePartEvent
   | ChatMessageEndEvent
   | ChatErrorEvent;

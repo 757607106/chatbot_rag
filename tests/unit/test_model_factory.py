@@ -43,5 +43,5 @@ def test_create_chat_model_passes_validated_provider_settings(
 
     parameters = captured["parameters"]
     assert isinstance(parameters, model_factory.DashScopeChatParameters)
-    assert parameters.temperature == 0.7
+    assert parameters.temperature == 0.1
     assert parameters.top_p == 0.8

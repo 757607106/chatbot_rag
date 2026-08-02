@@ -15,10 +15,10 @@ describe("streamAssistantReply", () => {
         controller.enqueue(
           encoder.encode(
             [
-              '{"version":1,"type":"message_start","message_id":"reply"}',
-              '{"version":1,"type":"text_delta","message_id":"reply","text":"你"}',
-              '{"version":1,"type":"text_delta","message_id":"reply","text":"好"}',
-              '{"version":1,"type":"message_end","message_id":"reply","finish_reason":"completed"}',
+              '{"version":2,"type":"message_start","message_id":"reply"}',
+              '{"version":2,"type":"text_delta","message_id":"reply","text":"你"}',
+              '{"version":2,"type":"text_delta","message_id":"reply","text":"好"}',
+              '{"version":2,"type":"message_end","message_id":"reply","finish_reason":"completed"}',
               "",
             ].join("\n"),
           ),
@@ -47,7 +47,7 @@ describe("streamAssistantReply", () => {
       start(controller) {
         controller.enqueue(
           encoder.encode(
-            '{"version":1,"type":"error","code":"agent_error","message":"生成失败"}\n',
+            '{"version":2,"type":"error","code":"agent_error","message":"生成失败"}\n',
           ),
         );
         controller.close();
@@ -65,5 +65,47 @@ describe("streamAssistantReply", () => {
     };
 
     await expect(consume()).rejects.toEqual(new ChatRequestError("生成失败"));
+  });
+
+  it("按文本与图片事件顺序累积 assistant-ui 原生 parts", async () => {
+    const assetId = "a".repeat(64);
+    const responseBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              '{"version":2,"type":"message_start","message_id":"reply"}',
+              '{"version":2,"type":"text_delta","message_id":"reply","text":"第一步：打开设置。"}',
+              `{"version":2,"type":"image_part","message_id":"reply","url":"/api/media/${assetId}","filename":"操作步骤.png"}`,
+              '{"version":2,"type":"text_delta","message_id":"reply","text":"第二步：保存。"}',
+              '{"version":2,"type":"message_end","message_id":"reply","finish_reason":"completed"}',
+              "",
+            ].join("\n"),
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(responseBody, { status: 200 })),
+    );
+
+    const updates = [];
+    for await (const update of streamAssistantReply("怎么操作？", new AbortController().signal)) {
+      updates.push(update);
+    }
+
+    expect(updates.at(-1)).toEqual({
+      content: [
+        { type: "text", text: "第一步：打开设置。" },
+        {
+          type: "image",
+          image: `/api/media/${assetId}`,
+          filename: "操作步骤.png",
+        },
+        { type: "text", text: "第二步：保存。" },
+      ],
+    });
   });
 });

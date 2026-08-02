@@ -2,7 +2,8 @@
 
 本目录是独立的 Next.js 与 assistant-ui 工程。前端使用 assistant-ui
 `LocalRuntime` 管理页面内对话状态，通过 Next.js BFF 消费 Python API
-的版本化 NDJSON 流。
+的版本化 NDJSON 流，并按事件顺序把相关文档图片映射为 assistant-ui 原生图片 part，
+从而保持说明文字与图片交错对应。
 
 页面组件直接同步自 assistant-ui 官方
 [ChatGPT demo](https://github.com/assistant-ui/assistant-ui/blob/main/apps/docs/components/examples/chatgpt.tsx)；

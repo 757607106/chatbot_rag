@@ -37,6 +37,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { ImageMessagePart } from "@/components/assistant-ui/image-message-part";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { CloneThreadShell } from "./clone-thread-shell";
 
@@ -260,6 +261,7 @@ const AssistantMessage: FC = () => {
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type === "text") return <MarkdownText />;
+            if (part.type === "image") return <ImageMessagePart {...part} />;
             if (part.type === "tool-call") return part.toolUI ?? <ToolFallback {...part} />;
             return null;
           }}

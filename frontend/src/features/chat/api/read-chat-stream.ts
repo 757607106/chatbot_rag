@@ -1,6 +1,7 @@
 import { CHAT_PROTOCOL_VERSION, type ChatStreamEvent } from "@/features/chat/schemas/chat-stream";
 
 const MAX_EVENT_LINE_LENGTH = 128 * 1024;
+const MEDIA_URL_PATTERN = /^\/api\/media\/[0-9a-f]{64}$/;
 
 export class ChatStreamProtocolError extends Error {
   constructor(message = "回复流格式无效，请重试。") {
@@ -65,6 +66,18 @@ export function parseChatStreamEvent(line: string): ChatStreamEvent {
       break;
     case "text_delta":
       if (typeof value.message_id === "string" && typeof value.text === "string") {
+        return value as ChatStreamEvent;
+      }
+      break;
+    case "image_part":
+      if (
+        typeof value.message_id === "string" &&
+        typeof value.url === "string" &&
+        MEDIA_URL_PATTERN.test(value.url) &&
+        typeof value.filename === "string" &&
+        value.filename.length > 0 &&
+        value.filename.length <= 180
+      ) {
         return value as ChatStreamEvent;
       }
       break;

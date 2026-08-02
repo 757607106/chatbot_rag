@@ -57,3 +57,10 @@ def test_create_rag_agent_uses_static_rag_middleware(
         "top_k": 7,
         "persist_hint": False,
     }
+    system_prompt = cast(str, agent_kwargs["system_prompt"])
+    assert "任一条件冲突的证据都不得用于回答" in system_prompt
+    assert "不得把来自不同适用范围的片段拼成" in system_prompt
+    assert "检索内容已经按问题相关性降序排列" in system_prompt
+    assert "禁止把全部标记集中到回答末尾" in system_prompt
+    assert "对应说明段落或列表项之后" in system_prompt
+    assert "本地、Web" not in system_prompt

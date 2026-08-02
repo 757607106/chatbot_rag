@@ -9,8 +9,8 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 ## 模块职责
 
 - `config`：从环境变量加载并校验应用配置。
-- `models`：使用 AgentScope 官方凭据和模型类创建聊天模型与嵌入模型。
-- `rag`：负责文档解析、切块、幂等索引、Qdrant 生命周期和知识库装配。
+- `models`：创建聊天、嵌入模型，并通过 DashScope SDK 适配 qwen3-rerank。
+- `rag`：负责文档与图片解析、媒体资产、切块、幂等索引、Qdrant 生命周期和知识库装配。
 - `agents`：组合聊天模型、系统提示词和 AgentScope `RAGMiddleware`。
 - `services`：向协议适配层提供最终回复和原生事件流聊天用例。
 - `services/api`：FastAPI 协议边界，负责请求校验、事件转换、资源装配和错误映射。
@@ -63,12 +63,34 @@ registry 组件是可定制源码，但通用组件不得直接 `fetch`，业务
 
 ## RAG 数据流
 
-`文件 -> Parser -> ApproxTokenChunker -> DashScopeEmbeddingModel -> QdrantStore -> KnowledgeBase -> RAGMiddleware -> Agent`
+```text
+索引：文件 -> Parser -> ContextPreservingChunker(ApproxTokenChunker)
+    -> DashScopeEmbeddingModel -> QdrantStore
+
+查询：清理说话人前缀 -> Qdrant 向量候选 Top 50 -> qwen3-rerank -> 最终 Top 5
+    -> RAGMiddleware HintBlock -> Agent
+```
+
+Markdown 解析器以标题作为 `Section` 自然边界，图片只转换为原位内部引用，不再创建
+人为章节边界。解析器把完整标题路径写入章节元数据，`ContextPreservingChunker` 在
+`ApproxTokenChunker` 执行长度切分前后为每个文本块补充文档来源和该路径；Word 文本
+至少保留来源，PDF 文本同时保留来源与页码。因此所有格式的 Chunk 脱离前后文后仍有
+稳定范围，不依赖生成模型猜测它属于哪个文档或章节。
 
 索引以相对路径和文件内容摘要生成稳定的文档版本标识。启动时跳过未变化的
 文件；内容变化时先写入新版本，再删除同一路径的旧版本，避免正常重试产生
 重复索引；文件从受管目录移除后，其旧索引也会被删除。Qdrant 连接应由应用
 装配层持有，不能在单次检索中反复打开。
+
+`RerankingKnowledgeBase` 继承 AgentScope 原生 `KnowledgeBase`，只扩展 `search`：
+原生向量检索负责高召回，qwen3-rerank 使用问答相关性和完整显式条件匹配指令负责高精度。
+向量检索与重排序共用去除 AgentScope 说话人标签后的纯问题，重排序候选显式携带真实来源，
+内部媒体标记不会发送给模型。重排序成功后只返回模型确认的结果并采用其相关性分数，不为
+凑满 Top K 补回未经精排的候选。瞬时网络异常会执行一次有界重试，最终失败时记录内部
+错误并回退到向量 Top K；向量检索无结果时，系统提示要求明确拒答且不得伪造来源。
+
+生成阶段使用低随机性的事实问答参数，并以通用证据契约核对问题中的对象、属性、版本、
+环境、时间与适用条件。实现中不包含某个具体产品或问题的关键词分支。
 
 ## 当前取舍
 
@@ -77,10 +99,11 @@ registry 组件是可定制源码，但通用组件不得直接 `fetch`，业务
 智能体先采用 `static` 检索模式，保证每个问题在首次推理前获得知识上下文；
 需要让模型自主决定检索时，再作为独立行为变更评估 `agentic` 模式。
 
-当前已实现单会话纯文本流式竖切片：FastAPI 把 AgentScope 事件转换为版本 1
-NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累积增量，
-assistant-ui `LocalRuntime` 管理浏览器内消息状态。页面组件直接同步自 assistant-ui
-官方 ChatGPT demo，不在 registry 组件中加入项目自定义视觉层。
+当前已实现单会话文本与文档图片流式竖切片：FastAPI 把 AgentScope 事件转换为版本 2
+NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累积文本及
+`ImageMessagePart`，assistant-ui `LocalRuntime` 管理浏览器内消息状态。页面主体继续
+同步自 assistant-ui 官方 ChatGPT demo；图片 part 使用可审查的项目组件提供加载、
+失败、键盘焦点和全屏预览状态。
 
 锁定的 `@assistant-ui/react@0.15.1` 在 Next.js 开发模式的 React Strict Mode
 双重挂载下会让初始 LocalRuntime 线程失去绑定，表现为空态标题缺失、Composer
@@ -88,5 +111,21 @@ assistant-ui `LocalRuntime` 管理浏览器内消息状态。页面组件直接�
 用开发服务器和生产构建验证。升级 assistant-ui 时必须重新验证并优先恢复 Strict Mode。
 
 后端当前复用单个有状态智能体并串行处理请求，只能作为单进程单会话基线。
-附件、工具事件、语音、服务端线程隔离和持久化仍需独立设计与验收。详见
+用户上传附件、工具事件、语音、服务端线程隔离和持久化仍需独立设计与验收。详见
 `docs/adr/003-assistant-ui-web-frontend.md`。
+
+## 文档图片数据流
+
+`Markdown/Word/PDF -> 媒体感知 Parser -> MediaAssetStore + 文本媒体标记 -> 文本 Embedding -> Qdrant -> RAGMiddleware HintBlockEvent -> Agent 原位引用 -> Web image_part -> ImageMessagePart`
+
+图片二进制不进入文本 embedding 或 NDJSON。内嵌图片持久化到配置的媒体目录；远程
+图片只登记允许主机上的 HTTPS 地址并按需缓存。每个源文档维护图片清单，文档删除或
+图片减少后清理无引用资产。内部 `<chatbot-media>` 标记只用于把检索命中的文本块与
+图片资产关联。模型仅在采用相邻证据时把原标记放到对应说明之后；协议层跨文本增量
+解析标记，只有标记属于本轮检索结果时才原位转换为受控同源 URL，并对重复、编造和
+超量标记执行过滤。原始内部标记不会进入浏览器，未被回答引用的图片也不会在末尾追加。
+
+图片检索采用“文本召回、相邻图片随块返回”，保持现有 `text-embedding-v4`、
+`qwen3-rerank` 和 Qdrant collection，不为图片单独生成向量。需要按视觉内容搜索图片时，
+必须作为独立架构变更评估多模态 embedding、重建索引和模型输入能力。详见
+`docs/adr/004-rag-document-images.md`。

@@ -43,12 +43,21 @@ async def test_open_knowledge_base_manages_local_qdrant_lifecycle(
         captured["knowledge_base"] = kwargs
         return expected_knowledge_base
 
+    def fake_reranker(**kwargs: object) -> object:
+        captured["reranker"] = kwargs
+        return object()
+
     embedding_model = object()
     monkeypatch.setattr(knowledge_base_module, "QdrantStore", fake_store)
     monkeypatch.setattr(
         knowledge_base_module,
-        "KnowledgeBase",
+        "RerankingKnowledgeBase",
         fake_knowledge_base,
+    )
+    monkeypatch.setattr(
+        knowledge_base_module,
+        "QwenTextReranker",
+        fake_reranker,
     )
     monkeypatch.setattr(
         knowledge_base_module,
@@ -59,6 +68,8 @@ async def test_open_knowledge_base_manages_local_qdrant_lifecycle(
     settings = Settings(
         dashscope_api_key="secret",
         qdrant_path=qdrant_path,
+        rerank_model_name="rerank-model",
+        rerank_candidate_top_k=40,
     )
 
     async with knowledge_base_module.open_knowledge_base(settings) as result:
@@ -71,6 +82,11 @@ async def test_open_knowledge_base_manages_local_qdrant_lifecycle(
     knowledge_kwargs = captured["knowledge_base"]
     assert isinstance(knowledge_kwargs, dict)
     assert knowledge_kwargs["embedding_model"] is embedding_model
+    assert knowledge_kwargs["candidate_top_k"] == 40
+    assert captured["reranker"] == {
+        "api_key": "secret",
+        "model_name": "rerank-model",
+    }
 
 
 def test_create_vector_store_uses_remote_qdrant_configuration(

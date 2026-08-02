@@ -22,7 +22,7 @@ def create_chat_model(settings: Settings) -> DashScopeChatModel:
         credential=credential,
         model=settings.model_name,
         parameters=DashScopeChatParameters(
-            temperature=0.7,
+            temperature=0.1,
             top_p=0.8,
         ),
     )

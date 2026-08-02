@@ -9,6 +9,7 @@ from typing import cast
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from chatbot_rag.rag import MediaAssetStore
 from chatbot_rag.schemas import ChatStreamRequest
 from chatbot_rag.services import ChatService
 from chatbot_rag.services.api.stream_protocol import encode_chat_stream
@@ -33,6 +34,10 @@ async def stream_chat(
         流式 NDJSON 响应。
     """
     service = cast(ChatService, request.app.state.chat_service)
+    media_store = cast(
+        MediaAssetStore | None,
+        getattr(request.app.state, "media_store", None),
+    )
     lock = cast(asyncio.Lock, request.app.state.chat_lock)
 
     async def serialized_stream() -> AsyncIterator[bytes]:
@@ -40,6 +45,7 @@ async def stream_chat(
         async with lock:
             async for chunk in encode_chat_stream(
                 service.reply_stream(payload.message, user_name="web_user"),
+                media_store=media_store,
             ):
                 yield chunk
 

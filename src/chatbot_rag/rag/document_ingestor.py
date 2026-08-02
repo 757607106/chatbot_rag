@@ -22,7 +22,19 @@ from agentscope.rag import (
     WordParser,
 )
 
+from chatbot_rag.rag.media_assets import (
+    MediaAssetStore,
+    extract_media_asset_ids,
+)
+from chatbot_rag.rag.media_parsers import (
+    MarkdownMediaParser,
+    PDFMediaParser,
+    WordMediaParser,
+)
+
 CONTENT_HASH_KEY = "content_sha256"
+INGESTION_PIPELINE_KEY = "ingestion_pipeline"
+INGESTION_PIPELINE_VERSION = "document-scope-context-v3"
 SOURCE_PATH_KEY = "source_path"
 
 
@@ -49,6 +61,7 @@ class _PreparedDocument:
     relative_path: str
     content_hash: str
     chunks: list[Chunk]
+    media_asset_ids: set[str]
     previous_document_ids: tuple[str, ...]
 
 
@@ -60,6 +73,7 @@ class DocumentIngestor:
         knowledge_base: KnowledgeBase,
         chunker: ChunkerBase,
         parsers: Mapping[str, ParserBase] | None = None,
+        media_store: MediaAssetStore | None = None,
     ) -> None:
         """使用知识库、切块器和可选解析器映射初始化摄取器。
 
@@ -67,15 +81,24 @@ class DocumentIngestor:
             knowledge_base: 目标 AgentScope 知识库。
             chunker: 将解析结果转换为最终索引块的切块器。
             parsers: 以小写文件扩展名为键的解析器映射。
+            media_store: 可选的文档图片资产仓库。
         """
         self._knowledge_base = knowledge_base
         self._chunker = chunker
+        self._media_store = media_store
         if parsers is None:
-            parsers = {
-                ".md": TextParser(),
-                ".pdf": PDFParser(),
-                ".docx": WordParser(include_image=False),
-            }
+            if media_store is None:
+                parsers = {
+                    ".md": TextParser(),
+                    ".pdf": PDFParser(),
+                    ".docx": WordParser(include_image=False),
+                }
+            else:
+                parsers = {
+                    ".md": MarkdownMediaParser(media_store),
+                    ".pdf": PDFMediaParser(media_store),
+                    ".docx": WordMediaParser(media_store),
+                }
         self._parsers = dict(parsers)
 
     async def ingest_directory(
@@ -128,9 +151,15 @@ class DocumentIngestor:
                 summary
                 for summary in existing_versions
                 if summary.metadata.get(CONTENT_HASH_KEY) == content_hash
+                and summary.metadata.get(INGESTION_PIPELINE_KEY)
+                == INGESTION_PIPELINE_VERSION
             ]
 
-            if current_versions:
+            media_is_current = (
+                self._media_store is None
+                or self._media_store.has_document(relative_path)
+            )
+            if current_versions and media_is_current:
                 document_ids_to_delete.update(
                     summary.document_id
                     for summary in existing_versions
@@ -148,11 +177,14 @@ class DocumentIngestor:
             chunks = _remove_empty_text_chunks(
                 await self._chunker.chunk(sections),
             )
+            media_asset_ids = _extract_chunk_media_asset_ids(chunks)
             if not chunks:
                 document_ids_to_delete.update(
                     summary.document_id for summary in existing_versions
                 )
                 skipped_documents += 1
+                if self._media_store is not None:
+                    self._media_store.commit_document(relative_path, set())
                 continue
 
             prepared_documents.append(
@@ -160,6 +192,7 @@ class DocumentIngestor:
                     relative_path=relative_path,
                     content_hash=content_hash,
                     chunks=chunks,
+                    media_asset_ids=media_asset_ids,
                     previous_document_ids=tuple(
                         summary.document_id
                         for summary in existing_versions
@@ -174,6 +207,7 @@ class DocumentIngestor:
             document_id = _document_version_id(
                 document.relative_path,
                 document.content_hash,
+                INGESTION_PIPELINE_VERSION,
             )
             await self._knowledge_base.insert_document(
                 document.chunks,
@@ -181,8 +215,14 @@ class DocumentIngestor:
                 document_metadata={
                     SOURCE_PATH_KEY: document.relative_path,
                     CONTENT_HASH_KEY: document.content_hash,
+                    INGESTION_PIPELINE_KEY: INGESTION_PIPELINE_VERSION,
                 },
             )
+            if self._media_store is not None:
+                self._media_store.commit_document(
+                    document.relative_path,
+                    document.media_asset_ids,
+                )
             document_ids_to_delete.update(
                 document.previous_document_ids,
             )
@@ -190,6 +230,9 @@ class DocumentIngestor:
 
         for document_id in sorted(document_ids_to_delete):
             await self._knowledge_base.delete_document(document_id)
+
+        if self._media_store is not None:
+            self._media_store.prune_documents(active_sources)
 
         return IngestionSummary(
             indexed_documents=len(prepared_documents),
@@ -217,9 +260,15 @@ class DocumentIngestor:
         )
 
 
-def _document_version_id(relative_path: str, content_hash: str) -> str:
+def _document_version_id(
+    relative_path: str,
+    content_hash: str,
+    pipeline_version: str,
+) -> str:
     """根据相对路径和内容摘要生成稳定的文档版本标识。"""
-    identity = f"{relative_path}\0{content_hash}".encode("utf-8")
+    identity = (
+        f"{relative_path}\0{content_hash}\0{pipeline_version}"
+    ).encode("utf-8")
     return hashlib.sha256(identity).hexdigest()
 
 
@@ -235,3 +284,12 @@ def _remove_empty_text_chunks(chunks: list[Chunk]) -> list[Chunk]:
         chunk.chunk_index = index
         chunk.total_chunks = len(filtered_chunks)
     return filtered_chunks
+
+
+def _extract_chunk_media_asset_ids(chunks: list[Chunk]) -> set[str]:
+    """收集最终索引文本中引用的全部图片资产。"""
+    asset_ids: set[str] = set()
+    for chunk in chunks:
+        if isinstance(chunk.content, TextBlock):
+            asset_ids.update(extract_media_asset_ids(chunk.content.text))
+    return asset_ids

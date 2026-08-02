@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 from agentscope.rag import KnowledgeBase, QdrantStore
 
 from chatbot_rag.config import Settings
-from chatbot_rag.models import create_embedding_model
+from chatbot_rag.models import QwenTextReranker, create_embedding_model
+from chatbot_rag.rag.reranking_knowledge_base import RerankingKnowledgeBase
 
 KNOWLEDGE_BASE_DESCRIPTION = "用于回答项目资料相关问题的知识库。"
 
@@ -25,12 +26,17 @@ async def open_knowledge_base(
     """
     vector_store = _create_vector_store(settings)
     async with vector_store:
-        yield KnowledgeBase(
+        yield RerankingKnowledgeBase(
             name=settings.knowledge_base_name,
             description=KNOWLEDGE_BASE_DESCRIPTION,
             embedding_model=create_embedding_model(settings),
             vector_store=vector_store,
             collection=settings.knowledge_collection,
+            reranker=QwenTextReranker(
+                api_key=settings.dashscope_api_key,
+                model_name=settings.rerank_model_name,
+            ),
+            candidate_top_k=settings.rerank_candidate_top_k,
         )
 
 
