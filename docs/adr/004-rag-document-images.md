@@ -28,8 +28,9 @@
    并跨回答文本增量解析标记，在原位置输出版本 2 `image_part`，不再把所有命中图片
    统一追加到回复末尾。
 6. HTTP 层只转换属于本轮检索结果、首次出现且位于每次回复前 3 个的标记；事件只包含
-   同源媒体 URL 和文件名。编造、跨轮复用、重复及超量标记均不进入公共协议。
-6. 前端 `ChatModelAdapter` 将事件累积为 assistant-ui 原生 `ImageMessagePart`；Next.js
+   同源媒体 URL 和文件名。每张图片前还必须有自上一张图片后新增的非空正文；编造、
+   跨轮复用、连续、重复及超量标记均不进入公共协议。
+7. 前端 `ChatModelAdapter` 将事件累积为 assistant-ui 原生 `ImageMessagePart`；Next.js
    BFF 转发媒体内容，组件负责加载、失败、焦点和预览状态。
 
 ## 备选方案

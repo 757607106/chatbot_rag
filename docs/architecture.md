@@ -24,7 +24,7 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 
 下层模块不得依赖具体对外协议。HTTP API、终端界面、向量数据库和文档解析器
 应通过边界接口接入，不能把相关逻辑写入智能体主循环。`ChatService` 负责校验
-输入并创建 `UserMsg`；协议适配层只负责输入输出转换，不得直接管理模型、
+显式对话历史、创建请求级智能体并装配 AgentScope 消息；协议适配层只负责输入输出转换，不得直接管理模型、
 知识库或智能体主循环。具体协议类型不得进入 `services`、`agents` 或 `rag`。
 前端组件不直接请求模型、解析后端原生事件或持有任何服务端密钥。
 
@@ -79,6 +79,14 @@ assistant-ui 的 UI 层只通过 Runtime 读写对话状态。首个 Web 版本�
 重试、分支和取消；Python 后端仍是模型、RAG、工具权限和持久化数据的
 真实源。暂不引入 Assistant Cloud、Vercel AI SDK 或第二套智能体编排框架。
 
+`ChatModelAdapter.run` 每次把当前分支的完整可见文本历史提交给 HTTP API，并将
+每次流式更新累积为完整 assistant-ui message parts。后端不复用全局有状态 `Agent`：
+`ChatService` 为每个请求创建独立 Agent，将此前历史通过 `observe` 写入上下文，只把
+最后一条用户消息作为本次 `reply_stream` 输入。这样浏览器 Runtime 是页面内会话状态
+的唯一所有者，不同线程、重试和并发请求不会共享 AgentScope 工作记忆。如果未来改为
+服务端会话是真实状态源，必须独立评估 AgentScope Agent Service 与 assistant-ui
+`AssistantTransport` 等服务端状态协议，不能同时维护两套隐式历史。
+
 HTTP 层必须把 AgentScope 原生事件转换为独立、版本化的 Web 流式协议；
 浏览器不感知 Python 类或 AgentScope `AgentEvent` 结构。协议至少表达回复开始、
 文本增量、经脱敏的工具状态、完成与错误，并让用户取消信号贯穿整条链路。
@@ -107,7 +115,7 @@ registry 组件是可定制源码，但通用组件不得直接 `fetch`，业务
 索引：文件 -> Parser -> ContextPreservingChunker(ApproxTokenChunker)
     -> DashScopeEmbeddingModel -> QdrantStore
 
-查询：Agent 判断问题是否需要项目知识 -> search_knowledge
+查询：Agent 结合当前问题与显式历史判断是否需要项目知识 -> search_knowledge
     -> 清理查询前缀 -> Qdrant 向量候选 Top 50 -> qwen3-rerank -> 最终 Top 5
     -> 工具结果 -> Agent
 
@@ -142,12 +150,10 @@ AgentScope 原生 Parser 读取文本与表格，并显式关闭图片抽取，�
 
 当前使用 AgentScope 2.0.5 原生 RAG，而不引入 LlamaIndex。开发环境默认使用
 本地持久化 Qdrant，生产环境可通过相同的 `QdrantStore` 切换到远程服务。
-智能体采用 `agentic` 检索模式，将 `RAGMiddleware.list_tools()` 返回的官方
-`search_knowledge` 注册到 `Toolkit`。涉及项目资料、产品功能、操作步骤和私有事实的
-问题必须先检索；明确无关的通用问答、写作、翻译和创意任务不检索。指代型问题由模型
-结合对话历史改写为自包含查询，结果不足时可换一种明确表达再次检索。该模式减少无关
-问题的 Embedding、Qdrant 和重排序开销，但是否检索依赖模型遵循工具使用契约，因此
-需要用知识库问题与无关问题两类用例持续评估工具调用决策。
+智能体采用 AgentScope 2.0.5 官方 `agentic` RAG 模式。`RAGMiddleware.list_tools()`
+返回的 `search_knowledge` 注册到 `Toolkit`，模型结合当前问题与显式对话历史判断是否需要
+项目知识，并在存在指代时生成自包含查询。通用任务不固定产生检索开销；代价是是否检索
+依赖模型遵循工具契约，因此需要持续回归“应检索”和“不应检索”两类问题。
 
 当前已实现单会话文本与文档图片流式竖切片：FastAPI 把 AgentScope 事件转换为版本 2
 NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累积文本及
@@ -160,9 +166,9 @@ NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累
 受控值回滚；生产构建不受影响。`next.config.ts` 暂时显式关闭 Strict Mode，且已分别
 用开发服务器和生产构建验证。升级 assistant-ui 时必须重新验证并优先恢复 Strict Mode。
 
-后端当前复用单个有状态智能体并串行处理请求，只能作为单进程单会话基线。
-聊天附件、工具事件、语音、服务端线程隔离和持久化仍需独立设计与验收。知识库后台上传
-不是聊天附件协议的一部分。详见
+后端当前是请求级无状态生成：对话历史由 LocalRuntime 随当前分支显式提交，服务端不做
+线程持久化、跨请求事件回放或多端同步。聊天附件、公开工具事件、语音和服务端线程
+持久化仍需独立设计与验收。知识库后台上传不是聊天附件协议的一部分。详见
 `docs/adr/003-assistant-ui-web-frontend.md`。
 
 ## 文档图片数据流
@@ -175,7 +181,9 @@ NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累
 图片资产关联。模型仅在采用相邻证据时把原标记放到对应说明之后；协议层跨文本增量
 解析标记，并从 `search_knowledge` 的内部工具结果事件建立本轮允许列表。只有标记属于
 本轮检索结果时才原位转换为受控同源 URL，并对重复、编造和超量标记执行过滤；工具
-参数、检索原文和内部标记不会进入浏览器，未被回答引用的图片也不会在末尾追加。
+参数、检索原文和内部标记不会进入浏览器，未被回答引用的图片也不会在末尾追加。每张
+图片前还必须存在自上一张图片后新增的非空正文，连续图片标记只保留第一张，确保每个
+image part 都有独立的文字上下文。
 
 图片检索采用“文本召回、相邻图片随块返回”，保持现有 `text-embedding-v4`、
 `qwen3-rerank` 和 Qdrant collection，不为图片单独生成向量。需要按视觉内容搜索图片时，

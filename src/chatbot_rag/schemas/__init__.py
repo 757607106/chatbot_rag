@@ -3,6 +3,7 @@
 from chatbot_rag.schemas.chat_schema import (
     ChatErrorEvent,
     ChatImagePartEvent,
+    ChatInputMessage,
     ChatMessageEndEvent,
     ChatMessageStartEvent,
     ChatStreamRequest,
@@ -30,6 +31,7 @@ from chatbot_rag.schemas.knowledge_schema import (
 __all__ = [
     "ChatErrorEvent",
     "ChatImagePartEvent",
+    "ChatInputMessage",
     "ChatMessageEndEvent",
     "ChatMessageStartEvent",
     "ChatStreamRequest",

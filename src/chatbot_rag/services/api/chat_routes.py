@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -11,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from chatbot_rag.rag import MediaAssetStore
 from chatbot_rag.schemas import ChatStreamRequest
-from chatbot_rag.services import ChatService
+from chatbot_rag.services import ChatService, ConversationTurn
 from chatbot_rag.services.api.stream_protocol import encode_chat_stream
 
 CHAT_STREAM_MEDIA_TYPE = "application/x-ndjson"
@@ -38,19 +37,21 @@ async def stream_chat(
         MediaAssetStore | None,
         getattr(request.app.state, "media_store", None),
     )
-    lock = cast(asyncio.Lock, request.app.state.chat_lock)
+    conversation = [
+        ConversationTurn(role=message.role, content=message.content)
+        for message in payload.messages
+    ]
 
-    async def serialized_stream() -> AsyncIterator[bytes]:
-        """单会话阶段串行化回复，避免智能体状态并发写入。"""
-        async with lock:
-            async for chunk in encode_chat_stream(
-                service.reply_stream(payload.message, user_name="web_user"),
-                media_store=media_store,
-            ):
-                yield chunk
+    async def isolated_stream() -> AsyncIterator[bytes]:
+        """使用请求内历史和独立智能体生成回复。"""
+        async for chunk in encode_chat_stream(
+            service.reply_stream(conversation, user_name="web_user"),
+            media_store=media_store,
+        ):
+            yield chunk
 
     return StreamingResponse(
-        serialized_stream(),
+        isolated_stream(),
         media_type=CHAT_STREAM_MEDIA_TYPE,
         headers={
             "Cache-Control": "no-cache, no-transform",

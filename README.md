@@ -58,9 +58,8 @@ Markdown 外链图片、Word 内嵌图片和 PDF 页内图片会登记到媒体�
 `CHATBOT_QDRANT_API_KEY` 配置。
 
 智能体使用 AgentScope `RAGMiddleware` 的 `agentic` 模式，并把官方
-`search_knowledge` 注册到 `Toolkit`。涉及项目资料、产品功能和操作步骤的问题由模型
-自主调用知识库检索；明确无关的通用问答、写作或翻译任务不执行 Embedding、Qdrant
-和重排序。知识库相关问题检索无结果时必须明确拒答，不得用模型常识补全私有事实。
+`search_knowledge` 注册到 `Toolkit`。模型结合当前问题和显式对话历史自主判断是否检索；
+知识库相关问题检索无结果时必须明确拒答，不得用模型常识补全私有事实。
 
 ## 启动 Web 对话
 

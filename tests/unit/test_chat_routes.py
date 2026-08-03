@@ -21,14 +21,21 @@ class StreamingAgent:
 
     def __init__(self) -> None:
         """初始化为尚未接收消息。"""
-        self.received: Msg | None = None
+        self.received: Msg | list[Msg] | None = None
 
-    async def reply(self, inputs: Msg) -> Msg:
+    async def observe(self, msgs: Msg | list[Msg] | None = None) -> None:
+        """单轮路由测试不需要保留历史。"""
+        del msgs
+
+    async def reply(self, inputs: Msg | list[Msg]) -> Msg:
         """实现聊天服务协议的非流式方法。"""
         self.received = inputs
         return AssistantMsg(name="assistant", content="测试")
 
-    async def reply_stream(self, inputs: Msg) -> AsyncIterator[AgentEvent]:
+    async def reply_stream(
+        self,
+        inputs: Msg | list[Msg],
+    ) -> AsyncIterator[AgentEvent]:
         """记录输入并产生一次完整回复。"""
         self.received = inputs
         yield ReplyStartEvent(
@@ -48,7 +55,11 @@ class StreamingAgent:
 async def test_stream_chat_returns_ndjson_events() -> None:
     """HTTP 路由应保留流式事件边界与中文内容。"""
     agent = StreamingAgent()
-    app = create_app(ChatService(agent))
+
+    async def create_agent() -> StreamingAgent:
+        return agent
+
+    app = create_app(ChatService(create_agent))
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(
@@ -57,7 +68,11 @@ async def test_stream_chat_returns_ndjson_events() -> None:
     ) as client:
         response = await client.post(
             "/api/v1/chat/stream",
-            json={"message": "  什么是 RAG？  "},
+            json={
+                "messages": [
+                    {"role": "user", "content": "  什么是 RAG？  "},
+                ],
+            },
         )
 
     assert response.status_code == 200
@@ -66,14 +81,17 @@ async def test_stream_chat_returns_ndjson_events() -> None:
     )
     assert response.text.count("\n") == 3
     assert "来自知识库的回答" in response.text
-    assert agent.received is not None
+    assert isinstance(agent.received, Msg)
     assert agent.received.get_text_content() == "什么是 RAG？"
 
 
 @pytest.mark.asyncio
 async def test_stream_chat_rejects_blank_input_before_streaming() -> None:
     """空白消息应在响应头发送前被校验拒绝。"""
-    app = create_app(ChatService(StreamingAgent()))
+    async def create_agent() -> StreamingAgent:
+        return StreamingAgent()
+
+    app = create_app(ChatService(create_agent))
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(
@@ -82,7 +100,37 @@ async def test_stream_chat_rejects_blank_input_before_streaming() -> None:
     ) as client:
         response = await client.post(
             "/api/v1/chat/stream",
-            json={"message": "   "},
+            json={
+                "messages": [
+                    {"role": "user", "content": "   "},
+                ],
+            },
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_rejects_non_alternating_history() -> None:
+    """浏览器不得提交角色连续或不是用户结尾的伪造历史。"""
+    async def create_agent() -> StreamingAgent:
+        return StreamingAgent()
+
+    app = create_app(ChatService(create_agent))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/chat/stream",
+            json={
+                "messages": [
+                    {"role": "user", "content": "问题一"},
+                    {"role": "user", "content": "问题二"},
+                ],
+            },
         )
 
     assert response.status_code == 422

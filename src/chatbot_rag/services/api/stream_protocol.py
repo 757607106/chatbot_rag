@@ -138,6 +138,7 @@ async def encode_chat_stream(
     emitted_media_asset_ids: set[str] = set()
     inline_media_parser = _InlineMediaParser()
     knowledge_tool_media_parsers: dict[str, _InlineMediaParser] = {}
+    has_text_since_image = False
 
     try:
         async for event in events:
@@ -209,6 +210,11 @@ async def encode_chat_stream(
                     return
                 if event.delta:
                     for part in inline_media_parser.feed(event.delta):
+                        if (
+                            isinstance(part, _MediaReference)
+                            and not has_text_since_image
+                        ):
+                            continue
                         public_event = _public_part_event(
                             part,
                             message_id=message_id,
@@ -218,6 +224,10 @@ async def encode_chat_stream(
                         )
                         if public_event is not None:
                             yield _encode_event(public_event)
+                            if isinstance(public_event, ChatImagePartEvent):
+                                has_text_since_image = False
+                            elif public_event.text.strip():
+                                has_text_since_image = True
                 continue
 
             if isinstance(event, ReplyEndEvent):
@@ -226,6 +236,11 @@ async def encode_chat_stream(
                     return
                 if event.finished_reason == ReplyFinishedReason.COMPLETED:
                     for part in inline_media_parser.finish():
+                        if (
+                            isinstance(part, _MediaReference)
+                            and not has_text_since_image
+                        ):
+                            continue
                         public_event = _public_part_event(
                             part,
                             message_id=message_id,
@@ -235,6 +250,10 @@ async def encode_chat_stream(
                         )
                         if public_event is not None:
                             yield _encode_event(public_event)
+                            if isinstance(public_event, ChatImagePartEvent):
+                                has_text_since_image = False
+                            elif public_event.text.strip():
+                                has_text_since_image = True
                     yield _encode_event(
                         ChatMessageEndEvent(message_id=message_id),
                     )

@@ -15,6 +15,8 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
 ) -> None:
     """智能体应让模型通过官方工具自主决定是否检索知识库。"""
     captured: dict[str, object] = {}
+    rag_parameters: list[dict[str, object]] = []
+    rag_middlewares: list[dict[str, object]] = []
     model = object()
     search_tool = object()
     knowledge_base = cast(KnowledgeBase, object())
@@ -27,11 +29,11 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
 
             def __init__(self, **kwargs: object) -> None:
                 """记录传入的参数。"""
-                captured["rag_parameters"] = kwargs
+                rag_parameters.append(kwargs)
 
         def __init__(self, **kwargs: object) -> None:
             """记录传入的知识库和参数对象。"""
-            captured["rag_middleware"] = kwargs
+            rag_middlewares.append(kwargs)
 
         async def list_tools(self) -> list[object]:
             """返回用于验证注册行为的检索工具替身。"""
@@ -59,26 +61,35 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
     )
 
     agent_kwargs = cast(dict[str, object], captured["agent"])
-    middleware_kwargs = cast(
-        dict[str, object],
-        captured["rag_middleware"],
-    )
     assert agent_kwargs["model"] is model
     assert agent_kwargs["name"] == "rag_assistant"
-    assert middleware_kwargs["knowledge_bases"] == [knowledge_base]
+    assert len(rag_middlewares) == 1
+    assert all(
+        item["knowledge_bases"] == [knowledge_base]
+        for item in rag_middlewares
+    )
     assert agent_kwargs["middlewares"]
     assert agent_kwargs["toolkit"].__class__ is FakeToolkit
     assert captured["toolkit"] == {"tools": [search_tool]}
-    assert captured["rag_parameters"] == {
-        "mode": "agentic",
-        "top_k": 7,
-    }
+    assert rag_parameters == [
+        {"mode": "agentic", "top_k": 7},
+    ]
     system_prompt = cast(str, agent_kwargs["system_prompt"])
-    assert "必须先调用 `search_knowledge`" in system_prompt
-    assert "明确与知识库无关" in system_prompt
-    assert "任一条件冲突的证据都不得用于回答" in system_prompt
-    assert "不得把来自不同适用范围的片段拼成" in system_prompt
-    assert "工具结果已经按问题相关性降序排列" in system_prompt
-    assert "禁止把全部标记集中到回答末尾" in system_prompt
-    assert "对应说明段落或列表项之后" in system_prompt
+    assert "必须调用 `search_knowledge`" in system_prompt
+    assert "明确无关的通用问答" in system_prompt
+    assert "检索查询必须简洁、完整且自包含" in system_prompt
+    assert "禁止用普通文字输出工具名称" in system_prompt
+    assert "收到工具结果后再开始输出唯一的最终答案" in system_prompt
+    assert "该结论之后不得继续给出推测答案" in system_prompt
+    assert "不得为凑数添加其他命中结果" in system_prompt
+    assert "条件冲突、仅主题相似或超出提问范围" in system_prompt
+    assert "最多列 3–5 个核心步骤" in system_prompt
+    assert "每步最多 2 句且不使用二级列表" in system_prompt
+    assert "没有直接原文支持就删除" in system_prompt
+    assert "`[N] (source: <source 文件名>)` 中的值" in system_prompt
+    assert "collection 名称都不是文件来源" in system_prompt
+    assert "图片与文字必须一一对应" in system_prompt
+    assert "最直接的 1–3 张原位引用" in system_prompt
+    assert "每个步骤或说明段落最多引用 1 张图" in system_prompt
+    assert "禁止把标记集中到回答末尾" in system_prompt
     assert "本地、Web" not in system_prompt

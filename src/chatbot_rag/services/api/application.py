@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from agentscope.agent import Agent
 from fastapi import FastAPI
 
 from chatbot_rag.agents import create_rag_agent
@@ -45,7 +45,6 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
-    app.state.chat_lock = asyncio.Lock()
     app.state.media_store = media_store
     app.state.knowledge_coordinator = knowledge_coordinator
     if chat_service is not None:
@@ -74,12 +73,15 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.knowledge_coordinator = coordinator
         await coordinator.start()
-        app.state.chat_service = ChatService(
-            await create_rag_agent(
+
+        async def create_request_agent() -> Agent:
+            """为每次请求创建不共享对话状态的智能体。"""
+            return await create_rag_agent(
                 settings,
                 coordinator.default_service().knowledge_base,
-            ),
-        )
+            )
+
+        app.state.chat_service = ChatService(create_request_agent)
         try:
             yield
         finally:

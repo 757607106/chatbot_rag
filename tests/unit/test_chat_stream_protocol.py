@@ -299,18 +299,138 @@ async def test_encode_chat_stream_allows_media_from_agentic_search_tool(
 
 
 @pytest.mark.asyncio
-async def test_encode_chat_stream_does_not_append_unreferenced_media(
+async def test_encode_chat_stream_requires_text_for_each_image(
     tmp_path: Path,
 ) -> None:
-    """本轮虽检索到图片，但回答未引用时不得统一追加到末尾。"""
+    """每张图片前必须有独立正文，连续标记只能产生第一张图片。"""
+    media_store = MediaAssetStore(tmp_path / "media", ())
+    asset_ids = [
+        media_store.register_embedded(
+            data=base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
+                "nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+            ),
+            filename=f"步骤{index}.png",
+            identity=f"guide.md#image-{index}",
+        )
+        for index in (1, 2)
+    ]
+    media_store.commit_document("guide.md", set(asset_ids))
+    references = "\n".join(
+        format_media_reference(asset_id) for asset_id in asset_ids
+    )
+
+    result = await _decode(
+        _events(
+            HintBlockEvent(
+                reply_id="reply",
+                block_id="hint",
+                hint=references,
+            ),
+            ReplyStartEvent(
+                session_id="session",
+                reply_id="reply",
+                name="assistant",
+            ),
+            TextBlockDeltaEvent(
+                reply_id="reply",
+                block_id="text",
+                delta=f"第一步：打开设置。\n{references}",
+            ),
+            ReplyEndEvent(session_id="session", reply_id="reply"),
+        ),
+        media_store=media_store,
+    )
+
+    images = [event for event in result if event["type"] == "image_part"]
+    assert len(images) == 1
+    assert images[0]["url"] == f"/api/media/{asset_ids[0]}"
+
+
+@pytest.mark.asyncio
+async def test_encode_chat_stream_does_not_guess_media_placement(
+    tmp_path: Path,
+) -> None:
+    """正文未放置媒体标记时不得根据关键词猜测图片位置。"""
     media_store = MediaAssetStore(tmp_path / "media", ())
     asset_id = media_store.register_embedded(
         data=base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
             "nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
         ),
-        filename="无关图片.png",
+        filename="检索步骤.png",
         identity="guide.md#image-2",
+    )
+    unrelated_asset_id = media_store.register_embedded(
+        data=base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
+            "nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+        ),
+        filename="报表属性.png",
+        identity="guide.md#image-3",
+    )
+    media_store.commit_document(
+        "guide.md",
+        {asset_id, unrelated_asset_id},
+    )
+
+    result = await _decode(
+        _events(
+            HintBlockEvent(
+                reply_id="reply",
+                block_id="hint",
+                hint=(
+                    "检索内容\n"
+                    f"{format_media_reference(asset_id)}\n"
+                    "_如图：页面设置界面_\n"
+                    "另一段证据\n"
+                    f"{format_media_reference(unrelated_asset_id)}\n"
+                    "_如图：报表属性界面_"
+                ),
+            ),
+            ReplyStartEvent(
+                session_id="session",
+                reply_id="reply",
+                name="assistant",
+            ),
+            TextBlockDeltaEvent(
+                reply_id="reply",
+                block_id="text",
+                delta="打开页面设置。\n",
+            ),
+            ReplyEndEvent(
+                session_id="session",
+                reply_id="reply",
+            ),
+        ),
+        media_store=media_store,
+    )
+
+    assert [event["type"] for event in result] == [
+        "message_start",
+        "text_delta",
+        "message_end",
+    ]
+    assert result[1]["text"] == "打开页面设置。\n"
+    assert all(
+        event.get("type") != "image_part"
+        for event in result
+    )
+
+
+@pytest.mark.asyncio
+async def test_encode_chat_stream_does_not_guess_media_without_caption(
+    tmp_path: Path,
+) -> None:
+    """无法确认图片与文字对应关系时不得自动补图。"""
+    media_store = MediaAssetStore(tmp_path / "media", ())
+    asset_id = media_store.register_embedded(
+        data=base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
+            "nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+        ),
+        filename="无图注图片.png",
+        identity="guide.md#without-caption",
     )
     media_store.commit_document("guide.md", {asset_id})
 
@@ -329,12 +449,9 @@ async def test_encode_chat_stream_does_not_append_unreferenced_media(
             TextBlockDeltaEvent(
                 reply_id="reply",
                 block_id="text",
-                delta="回答只使用了另一段文字。",
+                delta="只输出能够确认的文字。",
             ),
-            ReplyEndEvent(
-                session_id="session",
-                reply_id="reply",
-            ),
+            ReplyEndEvent(session_id="session", reply_id="reply"),
         ),
         media_store=media_store,
     )

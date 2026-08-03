@@ -20,13 +20,15 @@ assistant-ui 将聊天界面分为组件、Runtime、后端/智能体、协议�
    TypeScript 严格模式、Tailwind CSS、shadcn/ui 和 assistant-ui React。使用 pnpm 并提交
    精确依赖与锁文件。
 2. 首个版本使用 assistant-ui `LocalRuntime` 和项目自有 `ChatModelAdapter`。
-   UI 组件只通过 Runtime 读写对话状态，适配器是前端与项目 HTTP API 的唯一映射层。
+   UI 组件只通过 Runtime 读写对话状态，适配器是前端与项目 HTTP API 的唯一映射层；
+   每次模型运行把 Runtime 提供的当前分支完整可见历史提交给后端。
 3. Python HTTP 适配层调用 `ChatService.reply_stream`，将 AgentScope 原生事件转换为
    独立、版本化、可取消的 Web 流式协议。不向前端暴露 `AgentEvent` 或 Python 内部类型。
 4. Next.js Route Handler 仅在同源部署、Cookie 会话或服务端鉴权需要时担任薄 BFF，
    不实现模型调用、RAG、工具权限或会话持久化。
 5. assistant-ui 默认只持有页面内交互状态；持久化会话和用户数据由项目后端
-   按权限边界管理。首版不引入 Assistant Cloud。
+   按权限边界管理。首版后端为每个请求创建独立 AgentScope Agent，通过显式历史恢复
+   上下文，不复用全局 Agent 的隐式记忆，也不引入 Assistant Cloud。
 6. 模型内部思维链不进入公共协议。工具参数和结果由后端允许列表和脱敏后再渲染，
    浏览器不持有模型或存储密钥。
 7. 先交付“单会话纯文本发送—流式回复—停止生成—错误重试”竖切片。
@@ -54,6 +56,8 @@ assistant-ui 将聊天界面分为组件、Runtime、后端/智能体、协议�
   双重挂载下无法稳定绑定初始线程；当前显式关闭 Strict Mode。该设置不是页面定制，
   升级 assistant-ui 后必须通过开发与生产两种模式复测，并在问题消失后恢复。
 - 流式协议映射、取消、错误、响应式和键盘交互成为新的验收面。
+- LocalRuntime 是当前页面内消息状态的唯一所有者；编辑、重试和分支会自然改变适配器收到
+  的 `messages`，后端必须以该历史为准，不能把其他请求遗留的 Agent 上下文混入本次回复。
 - 如果未来需要服务端真实时状态、可恢复流或复杂人在回路，需新增 ADR 评估
   `AssistantTransport`、AG-UI 或其他服务端状态协议。
 

@@ -14,22 +14,27 @@ export class ChatRequestError extends Error {
   }
 }
 
+export type ChatInputMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export const chatModelAdapter: ChatModelAdapter = {
   async *run({ messages, abortSignal }) {
-    const message = findLatestUserText(messages);
-    yield* streamAssistantReply(message, abortSignal);
+    const conversation = buildConversation(messages);
+    yield* streamAssistantReply(conversation, abortSignal);
   },
 };
 
 export async function* streamAssistantReply(
-  message: string,
+  messages: readonly ChatInputMessage[],
   abortSignal: AbortSignal,
 ): AsyncGenerator<ChatModelRunResult, void> {
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ messages }),
       cache: "no-store",
       signal: abortSignal,
     });
@@ -109,20 +114,29 @@ export async function* streamAssistantReply(
   }
 }
 
-function findLatestUserText(messages: readonly ThreadMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "user") continue;
-
+export function buildConversation(messages: readonly ThreadMessage[]): ChatInputMessage[] {
+  const conversation: ChatInputMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== "user" && message.role !== "assistant") continue;
     const text = message.content
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n")
       .trim();
-    if (text) return text;
+    if (!text) continue;
+
+    const previous = conversation.at(-1);
+    if (previous?.role === message.role) {
+      previous.content = `${previous.content}\n\n${text}`;
+    } else {
+      conversation.push({ role: message.role, content: text });
+    }
   }
 
-  throw new ChatRequestError("请先输入需要查询的问题。");
+  if (conversation.length === 0 || conversation.at(-1)?.role !== "user") {
+    throw new ChatRequestError("请先输入需要查询的问题。");
+  }
+  return conversation;
 }
 
 async function readHttpError(response: Response): Promise<string> {

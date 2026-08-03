@@ -1,11 +1,15 @@
 """Web 聊天流协议数据结构。"""
 
+from __future__ import annotations
+
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 CHAT_PROTOCOL_VERSION: Literal[2] = 2
 MAX_CHAT_MESSAGE_LENGTH = 20_000
+MAX_CHAT_CONTEXT_MESSAGES = 100
+MAX_CHAT_CONTEXT_LENGTH = 100_000
 
 
 class _StrictSchema(BaseModel):  # type: ignore[misc]
@@ -14,19 +18,51 @@ class _StrictSchema(BaseModel):  # type: ignore[misc]
     model_config = ConfigDict(extra="forbid")
 
 
-class ChatStreamRequest(_StrictSchema):
-    """单次流式聊天请求。"""
+class ChatInputMessage(_StrictSchema):
+    """浏览器显式提交的一条对话历史消息。"""
 
-    message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
 
-    @field_validator("message")
+    @field_validator("content")
     @classmethod
-    def normalize_message(cls, value: str) -> str:
-        """拒绝仅包含空白的用户输入。"""
+    def normalize_content(cls, value: str) -> str:
+        """统一去除消息边界空白并拒绝空消息。"""
         normalized = value.strip()
         if not normalized:
-            raise ValueError("message must not be empty")
+            raise ValueError("content must not be empty")
         return normalized
+
+
+class ChatStreamRequest(_StrictSchema):
+    """携带完整可见历史的单次流式聊天请求。"""
+
+    messages: list[ChatInputMessage] = Field(
+        min_length=1,
+        max_length=MAX_CHAT_CONTEXT_MESSAGES,
+    )
+
+    @model_validator(mode="after")
+    def validate_conversation(self) -> ChatStreamRequest:
+        """只接受由用户发起且角色交替的有限对话历史。"""
+        if self.messages[0].role != "user":
+            raise ValueError("conversation must start with a user message")
+        if self.messages[-1].role != "user":
+            raise ValueError("conversation must end with a user message")
+        if any(
+            previous.role == current.role
+            for previous, current in zip(
+                self.messages,
+                self.messages[1:],
+                strict=False,
+            )
+        ):
+            raise ValueError("conversation roles must alternate")
+        if sum(len(message.content) for message in self.messages) > (
+            MAX_CHAT_CONTEXT_LENGTH
+        ):
+            raise ValueError("conversation is too long")
+        return self
 
 
 class ChatMessageStartEvent(_StrictSchema):

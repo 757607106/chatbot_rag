@@ -7,10 +7,18 @@
 请求体：
 
 ```json
-{"message":"用户问题"}
+{
+  "messages": [
+    {"role":"user","content":"上一问"},
+    {"role":"assistant","content":"上一答"},
+    {"role":"user","content":"当前问题"}
+  ]
+}
 ```
 
-`message` 会去除首尾空白，不能为空，最大长度为 20,000 个字符；额外字段会被拒绝。
+`messages` 是 assistant-ui 当前分支的完整可见文本历史，必须以用户消息开始和结束，
+且 `user`、`assistant` 角色严格交替。每条 `content` 会去除首尾空白，不能为空，最大
+长度为 20,000 个字符；最多 100 条消息，总字符数最多 100,000，额外字段会被拒绝。
 响应媒体类型为 `application/x-ndjson`，每行是一个独立 JSON 事件。公共协议版本固定为
 `2`，正常事件顺序如下：
 
@@ -23,6 +31,7 @@
 
 `image_part` 只在本次 RAG 检索命中了关联图片，且模型在对应说明位置引用该图片时出现；
 事件会紧跟对应的文本段落或列表项，每次回复最多发送 3 张，不会在结束事件前统一追加。
+每张图片前必须有自上一张图片后新增的非空正文，连续图片标记只转换第一张。
 `url` 必须是同源 `/api/media/<asset_id>`，不会向浏览器公开文档磁盘路径或远程
 原始图片地址。前端必须将文字和图片累积为完整 assistant-ui 消息 parts；后续事件
 不得覆盖此前图片。
@@ -51,24 +60,31 @@ HTTP 响应头发出后的失败通过流内错误表达：
 浏览器不直接调用该地址，而是请求 Next.js 同源 `GET /api/media/{asset_id}` BFF。
 未知标识返回 404；远程图片暂时无法取得返回 502。
 
-当前后端复用一个有状态 AgentScope 智能体，并用锁串行化回复，因此仅适用于单进程、
-单会话竖切片。引入多用户前必须先增加服务端会话标识与隔离，不得依赖前端线程 ID
-隐式隔离智能体记忆。
+每个请求创建独立 AgentScope 智能体，并把 `messages` 中除最后一条外的历史通过
+`Agent.observe` 写入本次上下文，再以最后一条用户消息触发 `reply_stream`。请求之间不
+共享工作记忆，也不需要用全局锁串行化。当前协议不提供服务端会话持久化；刷新后历史、
+多端同步和可恢复流需要单独的服务端状态方案。
 
 ## 应用服务
 
 非 HTTP 调用可直接使用：
 
 ```python
-reply = await ChatService(agent).reply("用户问题")
+async def create_agent():
+    return await create_rag_agent(settings, knowledge_base)
 
-async for event in ChatService(agent).reply_stream("用户问题"):
+service = ChatService(create_agent)
+conversation = [ConversationTurn(role="user", content="用户问题")]
+
+reply = await service.reply(conversation)
+
+async for event in service.reply_stream(conversation):
     ...
 ```
 
 `reply_stream` 返回 AgentScope 2.0.5 原生 `AgentEvent`，只允许协议适配层消费。
-智能体使用 `agentic` RAG：模型仅在判断问题需要项目知识时调用只读
-`search_knowledge`。工具调用、查询参数和检索原文不会进入公共 NDJSON；若检索结果
+智能体使用 AgentScope 官方 `agentic` RAG：模型结合当前问题和显式对话历史判断是否调用
+只读 `search_knowledge`。工具调用、查询参数和检索原文不会进入公共 NDJSON；若工具结果
 含有关联图片，协议层只在内部提取媒体允许列表。
 
 ## RAG 摄取
