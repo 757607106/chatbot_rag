@@ -176,7 +176,7 @@ NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累
 `Markdown/Word/PDF -> 媒体感知 Parser -> MediaAssetStore + 文本媒体标记 -> 文本 Embedding -> Qdrant -> search_knowledge 工具结果 -> Agent 原位引用 -> Web image_part -> ImageMessagePart`
 
 图片二进制不进入文本 embedding 或 NDJSON。内嵌图片持久化到配置的媒体目录；远程
-图片只登记允许主机上的 HTTPS 地址并按需缓存。每个源文档维护图片清单，文档删除或
+图片只登记允许主机上的 HTTP/HTTPS 地址并按需缓存。每个源文档维护图片清单，文档删除或
 图片减少后清理无引用资产。内部 `<chatbot-media>` 标记只用于把检索命中的文本块与
 图片资产关联。模型仅在采用相邻证据时把原标记放到对应说明之后；协议层跨文本增量
 解析标记，并从 `search_knowledge` 的内部工具结果事件建立本轮允许列表。只有标记属于

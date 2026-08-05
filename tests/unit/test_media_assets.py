@@ -81,6 +81,42 @@ async def test_media_store_downloads_allowed_remote_image_once(
     assert requests == 1
 
 
+@pytest.mark.asyncio
+async def test_media_store_downloads_allowed_http_remote_image(
+    tmp_path: Path,
+) -> None:
+    """HTTP 远程图片应与 HTTPS 一样通过校验并按需缓存。"""
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        assert request.url.host == "images.example.com"
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "image/png"},
+            content=PNG_BYTES,
+        )
+
+    store = MediaAssetStore(
+        tmp_path / "media",
+        ("images.example.com",),
+        transport=httpx.MockTransport(handler),
+    )
+    asset_id = store.register_remote(
+        "http://images.example.com/manual/step.png",
+        filename="操作步骤.png",
+        identity="manual.md#image-0",
+    )
+
+    first = await store.materialize(asset_id)
+    second = await store.materialize(asset_id)
+
+    assert first.path.read_bytes() == PNG_BYTES
+    assert second.media_type == "image/png"
+    assert requests == 1
+
+
 def test_media_store_rejects_remote_host_outside_allowlist(
     tmp_path: Path,
 ) -> None:
@@ -90,6 +126,20 @@ def test_media_store_rejects_remote_host_outside_allowlist(
     with pytest.raises(MediaAssetError, match="允许范围"):
         store.register_remote(
             "https://unsafe.example.com/image.png",
+            filename="image.png",
+            identity="manual.md#image-0",
+        )
+
+
+def test_media_store_rejects_non_http_scheme(
+    tmp_path: Path,
+) -> None:
+    """非 HTTP/HTTPS 协议的远程图片不得登记。"""
+    store = MediaAssetStore(tmp_path / "media", ("images.example.com",))
+
+    with pytest.raises(MediaAssetError, match="允许范围"):
+        store.register_remote(
+            "ftp://images.example.com/image.png",
             filename="image.png",
             identity="manual.md#image-0",
         )

@@ -100,7 +100,7 @@ class MediaAssetStore:
 
         Args:
             root: 图片元数据、清单和缓存文件的根目录。
-            allowed_remote_hosts: 允许后端代理的 HTTPS 图片主机。
+            allowed_remote_hosts: 允许后端代理的 HTTP/HTTPS 图片主机。
             transport: 仅用于测试替换远程 HTTP 传输。
         """
         self._root = root
@@ -160,7 +160,7 @@ class MediaAssetStore:
         filename: str,
         identity: str,
     ) -> str:
-        """登记允许代理的远程 HTTPS 图片。
+        """登记允许代理的远程 HTTP/HTTPS 图片。
 
         Args:
             url: 原始图片地址，仅保存在服务端。
@@ -403,20 +403,27 @@ class MediaAssetStore:
         return updated
 
     def _validate_remote_url(self, url: str) -> str:
-        """验证远程地址只使用允许主机上的标准 HTTPS。"""
+        """验证远程地址只使用允许主机上的标准 HTTP 或 HTTPS。"""
         parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
         host = (parsed.hostname or "").lower().rstrip(".")
         try:
             port = parsed.port
         except ValueError as error:
             raise MediaAssetError("远程图片端口无效。") from error
+        if scheme == "https":
+            allowed_ports: tuple[int | None, ...] = (None, 443)
+        elif scheme == "http":
+            allowed_ports = (None, 80)
+        else:
+            allowed_ports = ()
         if (
-            parsed.scheme != "https"
+            not allowed_ports
             or not host
             or host not in self._allowed_remote_hosts
             or parsed.username is not None
             or parsed.password is not None
-            or port not in (None, 443)
+            or port not in allowed_ports
             or not parsed.path
         ):
             raise MediaAssetError("远程图片地址不在允许范围内。")

@@ -53,7 +53,7 @@ HTTP 响应头发出后的失败通过流内错误表达：
 ### `GET /api/v1/media/{asset_id}`
 
 返回摄取阶段登记的浏览器安全图片。内嵌图片直接从本地媒体仓库读取；远程 Markdown
-图片首次访问时由后端从 `CHATBOT_REMOTE_IMAGE_HOSTS` 允许的 HTTPS 主机下载，并在
+图片首次访问时由后端从 `CHATBOT_REMOTE_IMAGE_HOSTS` 允许的 HTTP/HTTPS 主机下载，并在
 校验响应状态、MIME、文件签名和 10 MB 上限后缓存。响应使用
 `Content-Disposition: inline`、`X-Content-Type-Options: nosniff` 和私有缓存头。
 

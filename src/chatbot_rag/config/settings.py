@@ -30,6 +30,7 @@ class Settings:
     media_path: Path = Path(".data/media")
     remote_image_hosts: tuple[str, ...] = (
         "alidocs.oss-cn-zhangjiakou.aliyuncs.com",
+        "yunhelp.gmgrasp.com.cn",
     )
     qdrant_path: Path = Path(".data/qdrant")
     qdrant_url: str | None = None
@@ -92,7 +93,8 @@ class Settings:
         remote_image_hosts = _read_remote_image_hosts(
             source.get(
                 "CHATBOT_REMOTE_IMAGE_HOSTS",
-                "alidocs.oss-cn-zhangjiakou.aliyuncs.com",
+                "alidocs.oss-cn-zhangjiakou.aliyuncs.com,"
+                "yunhelp.gmgrasp.com.cn",
             ),
         )
         qdrant_path = source.get(

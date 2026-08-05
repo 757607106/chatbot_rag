@@ -15,8 +15,9 @@
 
 1. 保留文本 embedding。解析器把图片保存或登记到 `MediaAssetStore`，并在相邻文本中
    写入内部媒体标记；图片本身不进入 embedding。
-2. Markdown 远程图片仅接受配置允许主机上的 HTTPS 地址，首次读取时由后端校验状态、
-   MIME、文件签名和 10 MB 上限后缓存；不允许重定向。
+2. Markdown 远程图片仅接受配置允许主机上的 HTTP/HTTPS 地址，首次读取时由后端校验状态、
+   MIME、文件签名和 10 MB 上限后缓存；不允许重定向。不符合安全约束的远程图片在
+   摄取阶段跳过并记录告警，不影响文档文本内容的索引。
 3. Word 使用 AgentScope 2.0.5 `WordParser(include_image=True)` 取得 `DataBlock` 后保存，
    PDF 使用项目 parser 按页提取文本与图片。最终交给
    `ContextPreservingChunker(ApproxTokenChunker)` 的内容仍是 `TextBlock`，避免文本

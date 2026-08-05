@@ -94,6 +94,7 @@ def test_settings_use_defaults_for_optional_empty_values() -> None:
     assert settings.media_path == Path(".data/media")
     assert settings.remote_image_hosts == (
         "alidocs.oss-cn-zhangjiakou.aliyuncs.com",
+        "yunhelp.gmgrasp.com.cn",
     )
     assert settings.qdrant_path == Path(".data/qdrant")
     assert settings.rag_top_k == 5

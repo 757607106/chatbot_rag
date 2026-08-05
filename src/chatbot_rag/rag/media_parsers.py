@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import re
 from pathlib import Path
@@ -14,14 +15,17 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from chatbot_rag.rag.media_assets import (
+    MediaAssetError,
     MediaAssetStore,
     format_media_reference,
 )
 from chatbot_rag.rag.contextual_chunker import RETRIEVAL_CONTEXT_KEY
 
+_logger = logging.getLogger(__name__)
+
 _MARKDOWN_IMAGE_PATTERN = re.compile(
     r"!\[(?P<alt>[^\]\r\n]*)\]"
-    r"\(\s*(?P<url>https://[^\s)]+)"
+    r"\(\s*(?P<url>https?://[^\s)]+)"
     r"(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)",
 )
 _MARKDOWN_HEADING_PATTERN = re.compile(
@@ -74,7 +78,11 @@ def _replace_markdown_images(
     filename: str,
     media_store: MediaAssetStore,
 ) -> str:
-    """把代码围栏外的远程 Markdown 图片原位替换为内部媒体引用。"""
+    """把代码围栏外的远程 Markdown 图片原位替换为内部媒体引用。
+
+    不符合安全约束（协议、主机、端口等）的远程图片会被跳过，
+    不影响文档文本内容的索引。
+    """
     values: list[str] = []
     fence_marker: str | None = None
     ordinal = 0
@@ -97,11 +105,21 @@ def _replace_markdown_images(
         cursor = 0
         for match in _MARKDOWN_IMAGE_PATTERN.finditer(line):
             values.append(line[cursor:match.start()])
-            asset_id = media_store.register_remote(
-                url=match.group("url"),
-                filename=match.group("alt"),
-                identity=f"{filename}#markdown-image-{ordinal}",
-            )
+            try:
+                asset_id = media_store.register_remote(
+                    url=match.group("url"),
+                    filename=match.group("alt"),
+                    identity=f"{filename}#markdown-image-{ordinal}",
+                )
+            except MediaAssetError:
+                _logger.warning(
+                    "跳过不允许的远程图片：%s（文件 %s）",
+                    match.group("url"),
+                    filename,
+                )
+                ordinal += 1
+                cursor = match.end()
+                continue
             ordinal += 1
             values.append(format_media_reference(asset_id))
             cursor = match.end()
@@ -316,6 +334,8 @@ def _materialize_data_sections(
             ordinal=image_ordinal,
         )
         image_ordinal += 1
+        if asset_id is None:
+            continue
         reference = format_media_reference(asset_id)
         if output:
             _append_reference(output[-1], reference)
@@ -342,8 +362,11 @@ def _register_data_block(
     media_store: MediaAssetStore,
     filename: str,
     ordinal: int,
-) -> str:
-    """根据 DataBlock 源类型登记内嵌或远程图片。"""
+) -> str | None:
+    """根据 DataBlock 源类型登记内嵌或远程图片。
+
+    远程图片不符合安全约束时返回 None，由调用方跳过。
+    """
     display_name = (
         f"{Path(filename).stem}-{block.name or f'图片{ordinal + 1}'}"
     )
@@ -359,11 +382,19 @@ def _register_data_block(
             identity=identity,
         )
     if isinstance(block.source, URLSource):
-        return media_store.register_remote(
-            url=str(block.source.url),
-            filename=display_name,
-            identity=identity,
-        )
+        try:
+            return media_store.register_remote(
+                url=str(block.source.url),
+                filename=display_name,
+                identity=identity,
+            )
+        except MediaAssetError:
+            _logger.warning(
+                "跳过不允许的远程图片：%s（文件 %s）",
+                block.source.url,
+                filename,
+            )
+            return None
     raise TypeError(f"Unsupported data source: {type(block.source).__name__}")
 
 

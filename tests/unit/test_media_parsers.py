@@ -53,6 +53,58 @@ async def test_markdown_parser_replaces_remote_image_with_asset_reference(
 
 
 @pytest.mark.asyncio
+async def test_markdown_parser_replaces_http_remote_image(
+    tmp_path: Path,
+) -> None:
+    """HTTP 外链图片应与 HTTPS 一样登记到媒体仓库。"""
+    store = MediaAssetStore(tmp_path / "media", ("images.example.com",))
+    parser = MarkdownMediaParser(store)
+
+    sections = await parser.parse(
+        (
+            "![设置页面](http://images.example.com/setting.png)\n\n"
+            "第二步：保存。"
+        ).encode(),
+        "guide.md",
+    )
+
+    assert len(sections) == 1
+    assert isinstance(sections[0].content, TextBlock)
+    asset_ids = extract_media_asset_ids(sections[0].content.text)
+    assert len(asset_ids) == 1
+    assert "images.example.com" not in sections[0].content.text
+    assert store.describe(asset_ids[0]).filename == "设置页面"
+
+
+@pytest.mark.asyncio
+async def test_markdown_parser_skips_disallowed_remote_image(
+    tmp_path: Path,
+) -> None:
+    """不允许主机上的远程图片应被跳过，不影响文本索引。"""
+    store = MediaAssetStore(tmp_path / "media", ("images.example.com",))
+    parser = MarkdownMediaParser(store)
+
+    sections = await parser.parse(
+        (
+            "第一步：打开设置。\n\n"
+            "![允许图片](https://images.example.com/setting.png)\n\n"
+            "![不允许图片](https://other.example.com/forbidden.png)\n\n"
+            "第二步：保存。"
+        ).encode(),
+        "guide.md",
+    )
+
+    assert len(sections) == 1
+    assert isinstance(sections[0].content, TextBlock)
+    asset_ids = extract_media_asset_ids(sections[0].content.text)
+    assert len(asset_ids) == 1
+    assert "other.example.com" not in sections[0].content.text
+    assert "forbidden.png" not in sections[0].content.text
+    assert "第一步" in sections[0].content.text
+    assert "第二步" in sections[0].content.text
+
+
+@pytest.mark.asyncio
 async def test_markdown_parser_preserves_full_heading_context(
     tmp_path: Path,
 ) -> None:

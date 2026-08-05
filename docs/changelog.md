@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 远程 Markdown 图片同时支持 HTTP 和 HTTPS 地址，不再仅限 HTTPS；允许主机配置和
+  默认端口约束保持不变（HTTP 默认 80、HTTPS 默认 443）。
 - 对齐 assistant-ui `LocalRuntime` 的状态边界：`ChatModelAdapter` 每次提交当前分支的完整
   可见文本历史，后端为每个请求创建独立 AgentScope Agent，通过 `observe` 恢复显式历史，
   移除跨线程共享工作记忆的全局 Agent 和串行锁。
