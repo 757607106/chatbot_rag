@@ -20,14 +20,22 @@
 且 `user`、`assistant` 角色严格交替。每条 `content` 会去除首尾空白，不能为空，最大
 长度为 20,000 个字符；最多 100 条消息，总字符数最多 100,000，额外字段会被拒绝。
 响应媒体类型为 `application/x-ndjson`，每行是一个独立 JSON 事件。公共协议版本固定为
-`2`，正常事件顺序如下：
+`3`，正常事件顺序如下：
 
 ```json
-{"version":2,"type":"message_start","message_id":"reply-id"}
-{"version":2,"type":"text_delta","message_id":"reply-id","text":"文本增量"}
-{"version":2,"type":"image_part","message_id":"reply-id","url":"/api/media/64位资产标识","filename":"操作步骤.png"}
-{"version":2,"type":"message_end","message_id":"reply-id","finish_reason":"completed"}
+{"version":3,"type":"message_start","message_id":"reply-id"}
+{"version":3,"type":"tool_status","message_id":"reply-id","tool_call_id":"mcp-1","operation":"list_sales_orders","status":"running"}
+{"version":3,"type":"tool_status","message_id":"reply-id","tool_call_id":"mcp-1","operation":"list_sales_orders","status":"completed"}
+{"version":3,"type":"text_delta","message_id":"reply-id","text":"文本增量"}
+{"version":3,"type":"image_part","message_id":"reply-id","url":"/api/media/64位资产标识","filename":"操作步骤.png"}
+{"version":3,"type":"message_end","message_id":"reply-id","finish_reason":"completed"}
 ```
+
+`tool_status` 只在文本 Agent 执行 MCP 工具时出现。`tool_call_id` 是当前回复内按顺序
+生成的公共标识，不复用模型或 MCP 的内部调用标识；`operation` 只能取前端允许列表中的
+受控业务操作，`status` 为 `running`、`completed` 或 `failed`。协议不发送 MCP
+服务器名、真实工具名、参数、原始结果或异常详情；未知 MCP 工具统一映射为
+`external_business`。
 
 `image_part` 只在本次 RAG 检索命中了关联图片，且模型在对应说明位置引用该图片时出现；
 事件会紧跟对应的文本段落或列表项，每次回复最多发送 3 张，不会在结束事件前统一追加。
@@ -39,14 +47,14 @@
 HTTP 响应头发出后的失败通过流内错误表达：
 
 ```json
-{"version":2,"type":"error","code":"agent_error","message":"可公开错误文案"}
+{"version":3,"type":"error","code":"agent_error","message":"可公开错误文案"}
 ```
 
 错误码为 `agent_error`、`incomplete_stream` 或 `protocol_error`。公共协议发送助手
-回复生命周期、文本增量和已脱敏的文档图片引用；AgentScope 思考、工具参数、检索
-内部标记和异常细节不会进入浏览器。模型输出的图片标记只有属于本轮检索结果时才会
-转换为图片事件，编造、跨轮复用、重复或超过数量上限的标记会被丢弃。前端必须按
-`message_id` 校验事件归属。
+回复生命周期、MCP 脱敏状态、文本增量和已脱敏的文档图片引用；AgentScope 思考、
+工具参数、工具原始结果、检索内部标记和异常细节不会进入浏览器。模型输出的图片标记
+只有属于本轮检索结果时才会转换为图片事件，编造、跨轮复用、重复或超过数量上限的
+标记会被丢弃。前端必须按 `message_id` 校验事件归属。
 
 ## 文档图片
 
@@ -84,8 +92,9 @@ async for event in service.reply_stream(conversation):
 
 `reply_stream` 返回 AgentScope 2.0.5 原生 `AgentEvent`，只允许协议适配层消费。
 智能体使用 AgentScope 官方 `agentic` RAG：模型结合当前问题和显式对话历史判断是否调用
-只读 `search_knowledge`。工具调用、查询参数和检索原文不会进入公共 NDJSON；若工具结果
-含有关联图片，协议层只在内部提取媒体允许列表。
+只读 `search_knowledge`。知识库工具调用、所有工具参数和原始结果不会进入公共 NDJSON；
+MCP 只公开受控业务操作及运行、完成或失败状态。若知识库工具结果含有关联图片，协议层
+只在内部提取媒体允许列表。
 
 ## RAG 摄取
 
@@ -121,44 +130,61 @@ PPTX 和 Excel 当前只解析文本与表格，不抽取图片。向量仍由�
 最终失败时回退到原始向量 Top K，并在服务端记录错误。系统不会把上游响应细节或内部
 `<chatbot-media>` 标记发送给浏览器。
 
-## 语音识别
+## 实时语音
 
-### `POST /api/v1/speech/transcriptions`
+### `WS /api/v1/voice/realtime`
 
-使用 `multipart/form-data` 上传名为 `file` 的录音。支持 AAC、FLAC、MP4/M4A、MP3、
-Ogg/Opus、WAV 和 WebM，文件不能为空且最大 10 MB。成功响应示例：
+该地址为浏览器到项目后端的受控 WebSocket，不是百炼协议透传。握手必须携带在
+`CHATBOT_REALTIME_VOICE_ALLOWED_ORIGINS` 中声明的 HTTP/HTTPS `Origin`；缺失或不匹配
+时以关闭码 `1008` 拒绝。服务未装配时使用 `1011`。浏览器通过
+`NEXT_PUBLIC_CHATBOT_VOICE_WS_URL` 指向该地址，生产环境必须使用 `wss`。
+Origin 允许列表只限制浏览器来源，不构成用户身份认证；当前接口只适用于本地或受信网络，
+公网部署必须在反向代理或 API 网关增加身份认证、连接数限制和调用频率限制。
 
-```json
-{"text":"请查询今天的销售订单。","language":"zh","emotion":"neutral"}
-```
+服务接受连接后，以服务端 `DASHSCOPE_API_KEY` 建立独立百炼会话。默认配置为：
 
-识别模型由 `CHATBOT_ASR_MODEL` 控制，默认 `qwen3-asr-flash`；识别语言由
-`CHATBOT_ASR_LANGUAGE` 控制，默认 `zh`。模型 API Key 与聊天、嵌入和语音合成共用
-服务端 `DASHSCOPE_API_KEY`。音频只在 Python 服务端转换为 Data URL 后调用百炼，
-浏览器不持有 API Key。
+- 模型 `CHATBOT_REALTIME_VOICE_MODEL=qwen-audio-3.0-realtime-flash`；
+- 音色 `CHATBOT_REALTIME_VOICE_NAME=longanqian`；
+- `smart_turn` 轮次检测；
+- 16kHz、16bit、单声道 PCM 输入和 24kHz、16bit、单声道 PCM 输出；
+- AgentScope `RAGMiddleware` 产生的只读 `search_knowledge` Function Calling 工具。
 
-错误映射：缺少或空录音返回 `422`；格式不支持返回 `415`；超过 10 MB 返回 `413`；
-上游识别失败返回 `502`；语音识别服务未装配返回 `503`。浏览器请求 Next.js 同源
-`POST /api/speech/transcriptions` BFF，由 BFF 重复执行格式和大小边界校验。
-
-## 语音合成
-
-### `POST /api/v1/speech/tts`
-
-请求体：
+浏览器只允许发送一种事件。`audio` 是 PCM16 字节的 Base64；建议每 20ms 发送 640 字节，
+单帧硬上限为 6400 字节，空帧、奇数字节、无效 Base64 和额外字段都会返回协议错误并以
+`1008` 关闭。
 
 ```json
-{"text":"要朗读的助手回答"}
+{"type":"audio.append","audio":"<base64-pcm16>"}
 ```
 
-`text` 去除首尾空白后不能为空，最长 20,000 字符，与百炼
-`SpeechSynthesizer.call` 当前单次上限一致；额外字段会被拒绝。成功返回
-`audio/wav`（24kHz 单声道 16 位完整
-WAV）与 `Cache-Control: no-store`。合成模型由 `CHATBOT_TTS_MODEL` 控制，默认
-`qwen-audio-3.0-tts-plus`，音色由 `CHATBOT_TTS_VOICE` 控制，默认 `longanlingxin`。
+服务端公共事件如下：
 
-错误映射：文本无效返回 `422`；上游合成失败返回 `502`；语音服务未装配返回 `503`。
-浏览器不直接调用该地址，而是请求 Next.js 同源 `POST /api/speech/tts` BFF。
+```json
+{"type":"session.ready"}
+{"type":"input.speech_started"}
+{"type":"input.speech_stopped"}
+{"type":"transcript.user.delta","text":"稳定转写","stash":"临时转写"}
+{"type":"transcript.user.done","transcript":"用户最终转写"}
+{"type":"tool.started"}
+{"type":"tool.completed"}
+{"type":"transcript.assistant.delta","delta":"助手文本增量"}
+{"type":"transcript.assistant.done","transcript":"助手最终转写"}
+{"type":"audio.delta","audio":"<base64-24khz-pcm16>"}
+{"type":"response.done"}
+{"type":"error","code":"voice_service_unavailable","message":"可公开错误文案"}
+```
+
+`tool.started/tool.completed` 不包含工具名、参数或结果。模型发出
+`response.function_call_arguments.done` 后，后端通过 AgentScope `Toolkit.call_tool`
+执行工具，把最终结果作为 `function_call_output` 写回同一百炼会话，并在首轮
+`response.done` 后发送一次 `response.create` 生成可朗读回复。百炼原始事件、API Key、
+检索参数、证据全文和内部异常均不会进入浏览器。客户端格式错误使用
+`invalid_client_event`；上游连接或事件故障统一公开为 `voice_service_unavailable`。
+工具自身失败时写回受控错误结果，由模型向用户如实说明，不把异常详情发送到浏览器。
+前端必须将 `transcript.user.done`、`transcript.assistant.done` 以及断开前已生成的助手转写
+按事件顺序收集。语音会话结束后，客户端清除 assistant-ui 的临时 voice messages，再把
+收集结果一次性导入当前 `LocalRuntime` 基础消息分支，且不得再次触发文本模型生成。
+该记录只存在于页面线程；刷新恢复和多端同步仍需要独立的服务端会话持久化协议。
 
 ## 知识库管理 API
 

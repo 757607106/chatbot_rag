@@ -46,6 +46,7 @@ export async function* streamAssistantReply(
     let messageId: string | null = null;
     const content: ThreadAssistantMessagePart[] = [];
     let textPartIndex: number | null = null;
+    const toolPartIndexes = new Map<string, number>();
     let completed = false;
 
     for await (const event of readChatStream(response.body)) {
@@ -83,6 +84,40 @@ export async function* streamAssistantReply(
         yield {
           content: [...content],
         };
+        continue;
+      }
+
+      if (event.type === "tool_status") {
+        if (event.status === "running") {
+          if (toolPartIndexes.has(event.tool_call_id)) {
+            throw new ChatRequestError("服务器返回了重复的工具开始事件。");
+          }
+          toolPartIndexes.set(event.tool_call_id, content.length);
+          content.push({
+            type: "tool-call",
+            toolCallId: event.tool_call_id,
+            toolName: event.operation,
+            args: {},
+            argsText: "",
+          });
+          textPartIndex = null;
+        } else {
+          const toolPartIndex = toolPartIndexes.get(event.tool_call_id);
+          if (toolPartIndex === undefined) {
+            throw new ChatRequestError("回复流中的工具状态无效。");
+          }
+          const current = content[toolPartIndex];
+          if (current?.type !== "tool-call" || current.result !== undefined) {
+            throw new ChatRequestError("回复流中的工具状态无效。");
+          }
+          const failed = event.status === "failed";
+          content[toolPartIndex] = {
+            ...current,
+            result: { status: event.status },
+            ...(failed ? { isError: true } : {}),
+          };
+        }
+        yield { content: [...content] };
         continue;
       }
 

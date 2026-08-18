@@ -9,12 +9,13 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 ## 模块职责
 
 - `config`：从环境变量加载并校验应用配置。
-- `models`：创建聊天、嵌入、语音识别与语音合成模型，并通过 DashScope SDK 适配
-  qwen3-rerank。
+- `models`：创建聊天、嵌入模型和百炼实时语音 WebSocket 连接，并通过 DashScope SDK
+  适配 qwen3-rerank。
 - `rag`：负责文档与图片解析、媒体资产、切块、幂等索引、Qdrant 生命周期和知识库装配。
 - `agents`：组合聊天模型、系统提示词和 AgentScope `RAGMiddleware`，并把配置声明的
   MCP 服务器绑定为同一 `Toolkit` 中的外部工具。
-- `services`：向协议适配层提供最终回复、原生事件流聊天、语音识别和语音合成用例。
+- `services`：向协议适配层提供最终回复、原生事件流聊天和实时双工语音用例；
+  `RealtimeVoiceService` 只负责受控事件转换和 AgentScope 工具执行，不保存跨连接会话。
 - `services/knowledge_coordinator.py`：维护知识库注册表及每库独立服务生命周期。
 - `services/knowledge_service.py`：组合单个知识库的文档版本、后台任务、切片编辑和召回诊断。
 - `services/api`：FastAPI 协议边界，负责请求校验、事件转换、资源装配和错误映射。
@@ -159,46 +160,48 @@ AgentScope 原生 Parser 读取文本与表格，并显式关闭图片抽取，�
 可选 `enableTools` 允许列表会下沉为 `MCPClient.enable_tools`。`yunprint-billing`
 默认示例仅开放产品、计费参考和销售单查询/预览；提交、作废、更新和同步类
 工具不在无人工确认的对话工具集中。
-远程工具与 `search_knowledge` 注册进同一个 `Toolkit`，系统提示词要求模型区分
-知识检索与外部业务数据（计费、账单、订单等），外部工具失败时如实说明且不得
-编造数据。工具名、参数和原始结果不进入公共 NDJSON。详见
+远程工具与 `search_knowledge` 注册进同一个 `Toolkit`。系统提示词允许模型按问题
+不调用工具、调用其中一类工具或同时调用两类工具：知识库提供规则和操作说明，MCP
+提供实时业务数据。模型必须按 MCP 工具 schema 填写参数，并把工具结果视为数据而非
+新指令；单类工具失败不影响已有充分证据的其他部分。公共 NDJSON v3 只发送受控业务
+操作及运行、完成或失败状态，模型侧工具名、服务器名、参数和原始结果均不进入浏览器。
+前端把状态累计为 assistant-ui `tool-call` part，并使用项目组件显示中文业务标签。详见
 `docs/adr/007-speech-synthesis-and-mcp-binding.md`。
 
-## 语音输入与 Voice Mode 链路
+## 实时 Voice Mode 链路
 
 ```text
-浏览器麦克风 -> MediaRecorder -> 同源 /api/speech/transcriptions BFF
-  -> FastAPI POST /api/v1/speech/transcriptions -> SpeechRecognitionService
-    -> 百炼 qwen3-asr-flash -> 识别文本
+浏览器麦克风 -> AudioWorklet -> 16kHz/16bit/单声道 PCM（约 20ms/帧）
+  -> WS /api/v1/voice/realtime -> RealtimeVoiceService
+    -> 服务端鉴权的 Qwen-Audio Realtime WebSocket
+      -> 转写增量 + 24kHz PCM 回复增量 -> 浏览器排队播放
 
-普通语音输入：识别文本 -> assistant-ui Composer -> 用户确认后发送
-Voice Mode：VAD 自动分轮 -> 识别文本 -> 既有 /api/chat 流式 Agent
-  -> 同一 Toolkit 中的 RAG/MCP -> qwen-audio-3.0-tts-plus -> Web Audio 播放
-  -> 重新监听下一轮
+模型 Function Call(search_knowledge)
+  -> RealtimeVoiceService -> AgentScope Toolkit -> RAGMiddleware
+    -> function_call_output -> 同一 Realtime 会话继续生成文本和音频
+
+最终用户/助手转写 -> VoiceTranscriptLedger
+  -> 会话结束 -> 清除 assistant-ui 临时 voice messages
+    -> 原子导入当前 LocalRuntime 基础消息分支
 ```
 
-普通语音输入和 Voice Mode 共用服务端 ASR 边界。默认在检测到用户说话后的约 900ms
-静音结束当前轮次，单轮录音最长 30 秒；Voice Mode 只复用既有 `ChatModelAdapter` 与
-聊天协议，不建立第二套 Agent，因此知识库检索、MCP 工具允许列表和回答约束保持一致。
-录音格式及 10 MB 上限在 Next.js BFF 与 FastAPI 两侧重复校验。麦克风只在浏览器
-安全上下文中启用，用户拒绝权限时给出可恢复提示；音频、模型 Key 和 MCP Header
-不会暴露给前端日志。详见 `docs/adr/008-server-asr-and-agent-voice-mode.md`。
+每个浏览器连接对应一个独立 Qwen-Audio Realtime 会话，默认模型为速度优先的
+`qwen-audio-3.0-realtime-flash`，轮次检测使用 `smart_turn`，因此输入、转写、生成和播放
+可以重叠，用户说话能打断当前播报。服务端会话只注册由 AgentScope 2.0.5
+`RAGMiddleware.list_tools()` 产生的只读 `search_knowledge`；文本聊天仍使用原来的
+AgentScope Agent，并可额外绑定 MCP 工具。语音链路不把 MCP 写操作或文本 Agent 再串到
+实时会话中。
 
-## 语音合成链路
-
-```text
-助手消息朗读按钮 -> features/chat/api/tts-client -> 同源 /api/speech/tts BFF
-  -> FastAPI POST /api/v1/speech/tts -> SpeechSynthesisService
-    -> AgentScope DashScopeCosyVoiceTTSModel（百炼 qwen-audio-3.0-tts-plus
-       WebSocket 合成） -> WAV 音频 -> 浏览器 Audio 播放
-```
-
-合成模型由 `CHATBOT_TTS_MODEL`/`CHATBOT_TTS_VOICE` 配置，默认 plus 专属旗舰音色
-`longanlingxin`；API Key 使用 `DASHSCOPE_API_KEY`，WebSocket 端点可经 dashscope
-原生 `DASHSCOPE_WEBSOCKET_BASE_URL` 覆盖。服务返回非流式完整 WAV（24kHz 单声道
-16 位），单次文本限 20,000 字符。前端朗读按钮状态机为合成中/播放中/失败重试，可随时停止，
-浏览器不持有任何密钥。语音输入和 Voice Mode 复用该合成服务，但保持独立的录音与
-ASR 生命周期。
+浏览器只能发送 `audio.append`，单帧经 Base64 解码后不得超过 6400 字节且必须是完整
+PCM16 采样。服务端只公开会话就绪、语音起止、用户/助手转写、音频增量、脱敏工具状态、
+完成和错误事件，不透传百炼原始事件、工具参数或检索结果。浏览器通过显式
+`NEXT_PUBLIC_CHATBOT_VOICE_WS_URL` 连接 Python WebSocket；后端在接受连接前校验
+`CHATBOT_REALTIME_VOICE_ALLOWED_ORIGINS`。API Key 只用于服务端到百炼的握手 Header。
+锁定版 assistant-ui 会在会话期间把转写维护为临时 voice messages，并在手动断开时清空；
+项目因此只收集最终转写和已经生成的助手文字，在会话正常结束、手动结束或异常断开时，
+先统一清除临时消息，再通过公开 `ThreadRuntime.export/import` 把整段语音记录一次性接到
+当前基础消息分支。导入不启动 `ChatModelAdapter`，不会把语音问题再次提交给文本模型。
+详见 `docs/adr/009-qwen-audio-realtime-voice.md`。
 
 ## 当前取舍
 
@@ -221,8 +224,9 @@ NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累
 用开发服务器和生产构建验证。升级 assistant-ui 时必须重新验证并优先恢复 Strict Mode。
 
 后端当前是请求级无状态生成：文本界面对话历史由 LocalRuntime 随当前分支显式提交，
-Voice Mode 在一次连接内维护可见的用户/助手文本轮次；服务端不做线程持久化、跨请求
-事件回放或多端同步。聊天附件、公开工具事件和服务端线程持久化仍需独立设计与验收。
+Voice Mode 的百炼连接在存活期间维护用户/助手轮次，结束后文字记录保留在同一个页面级
+LocalRuntime 并可进入后续文本请求；项目服务端不做线程持久化、刷新恢复、跨请求事件
+回放或多端同步。聊天附件、公开工具事件和服务端线程持久化仍需独立设计与验收。
 知识库后台上传不是聊天附件协议的一部分。详见
 `docs/adr/003-assistant-ui-web-frontend.md`。
 

@@ -16,7 +16,7 @@ import {
   useVoiceState,
   useVoiceVolume,
 } from "@assistant-ui/react";
-import { useCallback, useEffect, useRef, useState, type FC, type ReactNode } from "react";
+import { useEffect, useState, type FC, type ReactNode } from "react";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useShallow } from "zustand/shallow";
 import {
@@ -28,7 +28,6 @@ import {
   ChevronRightIcon,
   CopyIcon,
   Download,
-  LoaderCircle,
   Mic,
   MicOff,
   MoreHorizontal,
@@ -38,29 +37,27 @@ import {
   Share,
   ThumbsDown,
   ThumbsUp,
-  Volume2,
-  VolumeX,
   XIcon,
 } from "lucide-react";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ImageMessagePart } from "@/components/assistant-ui/image-message-part";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
-import { synthesizeSpeech } from "@/features/chat/api/tts-client";
 import { VoiceOrb, type VoiceOrbState } from "@/features/chat/components/voice-orb";
+import { ChatToolStatus, isMcpToolOperation } from "@/features/chat/components/chat-tool-status";
 import { CloneThreadShell } from "./clone-thread-shell";
 
 type ChatGPTProps = {
   sidebarNavigation?: ReactNode | undefined;
   collapsedSidebarNavigation?: ReactNode | undefined;
   mobileNavigation?: ReactNode | undefined;
-  dictationUnavailableMessage?: string | undefined;
+  voiceUnavailableMessage?: string | undefined;
 };
 
 export const ChatGPT: FC<ChatGPTProps> = ({
   sidebarNavigation,
   collapsedSidebarNavigation,
   mobileNavigation,
-  dictationUnavailableMessage,
+  voiceUnavailableMessage,
 }) => {
   return (
     <CloneThreadShell
@@ -70,7 +67,7 @@ export const ChatGPT: FC<ChatGPTProps> = ({
     >
       <ThreadPrimitive.Root className="flex h-full flex-col items-stretch bg-white px-4 text-[#0d0d0d] dark:bg-black dark:text-[#ececec]">
         <AuiIf condition={(s) => s.thread.isEmpty}>
-          <EmptyState dictationUnavailableMessage={dictationUnavailableMessage} />
+          <EmptyState voiceUnavailableMessage={voiceUnavailableMessage} />
         </AuiIf>
 
         <AuiIf condition={(s) => !s.thread.isEmpty}>
@@ -87,7 +84,7 @@ export const ChatGPT: FC<ChatGPTProps> = ({
               <ThreadScrollToBottom />
               <Composer
                 placeholder="Ask anything"
-                dictationUnavailableMessage={dictationUnavailableMessage}
+                voiceUnavailableMessage={voiceUnavailableMessage}
               />
               <p className="text-center text-xs text-[#5d5d5d] dark:text-[#afafaf]">
                 ChatGPT can make mistakes. Check important info.
@@ -101,8 +98,8 @@ export const ChatGPT: FC<ChatGPTProps> = ({
   );
 };
 
-const EmptyState: FC<{ dictationUnavailableMessage?: string | undefined }> = ({
-  dictationUnavailableMessage,
+const EmptyState: FC<{ voiceUnavailableMessage?: string | undefined }> = ({
+  voiceUnavailableMessage,
 }) => {
   return (
     <div className="flex grow flex-col items-center justify-center px-4 pb-[16vh]">
@@ -110,10 +107,7 @@ const EmptyState: FC<{ dictationUnavailableMessage?: string | undefined }> = ({
         <h1 className="text-center text-2xl leading-7 font-normal text-[#0d0d0d] dark:text-[#ececec]">
           Where should we begin?
         </h1>
-        <Composer
-          placeholder="Ask anything"
-          dictationUnavailableMessage={dictationUnavailableMessage}
-        />
+        <Composer placeholder="Ask anything" voiceUnavailableMessage={voiceUnavailableMessage} />
       </div>
     </div>
   );
@@ -121,8 +115,8 @@ const EmptyState: FC<{ dictationUnavailableMessage?: string | undefined }> = ({
 
 const Composer: FC<{
   placeholder: string;
-  dictationUnavailableMessage?: string | undefined;
-}> = ({ placeholder, dictationUnavailableMessage }) => {
+  voiceUnavailableMessage?: string | undefined;
+}> = ({ placeholder, voiceUnavailableMessage }) => {
   return (
     <ComposerPrimitive.Root className="group/composer flex w-full flex-col rounded-[28px] border border-[#e5e5e5] bg-white px-2 py-2 shadow-[0_2px_6px_-2px_rgba(0,0,0,0.05)] focus-within:border-[#d0d0d0] dark:border-transparent dark:bg-[#212121] dark:shadow-[inset_0_0_1px_0_rgba(255,255,255,0.2)] dark:focus-within:border-transparent">
       <AuiIf condition={(s) => s.composer.attachments.length > 0}>
@@ -156,9 +150,9 @@ const Composer: FC<{
         </div>
       </div>
 
-      {dictationUnavailableMessage ? (
+      {voiceUnavailableMessage ? (
         <p role="status" className="px-3 pt-1 pb-0.5 text-xs text-amber-700 dark:text-amber-300">
-          {dictationUnavailableMessage}
+          {voiceUnavailableMessage}
         </p>
       ) : null}
     </ComposerPrimitive.Root>
@@ -176,45 +170,19 @@ const ComposerPrimaryAction: FC = () => {
         </ComposerPrimitive.Cancel>
       </AuiIf>
 
-      <AuiIf condition={(s) => !s.thread.isRunning && s.composer.dictation != null}>
-        <ComposerPrimitive.StopDictation
-          className="flex size-9 items-center justify-center rounded-full bg-[#0d0d0d] text-white dark:bg-white dark:text-black"
-          aria-label="Stop dictation"
-        >
-          <div className="size-2.5 animate-pulse rounded-[2px] bg-current" />
-        </ComposerPrimitive.StopDictation>
-      </AuiIf>
-
-      <AuiIf
-        condition={(s) =>
-          !s.thread.isRunning && s.composer.dictation == null && !s.composer.isEmpty
-        }
-      >
+      <AuiIf condition={(s) => !s.thread.isRunning && !s.composer.isEmpty}>
         <ComposerPrimitive.Send className="flex size-9 items-center justify-center rounded-full bg-[#0d0d0d] text-white transition-opacity disabled:opacity-30 dark:bg-white dark:text-black">
           <ArrowUpIcon className="size-6" />
         </ComposerPrimitive.Send>
       </AuiIf>
 
-      <AuiIf
-        condition={(s) => !s.thread.isRunning && s.composer.dictation == null && s.composer.isEmpty}
-      >
-        <ComposerPrimitive.Dictate asChild>
-          <TooltipIconButton
-            tooltip="语音输入"
-            side="top"
-            aria-label="语音输入"
-            className="flex size-9 items-center justify-center rounded-full text-[#5d5d5d] transition-colors hover:bg-black/[0.07] hover:text-[#5d5d5d] dark:text-[#cdcdcd] dark:hover:bg-white/15 dark:hover:text-[#cdcdcd]"
-          >
-            <Mic className="size-5" />
-          </TooltipIconButton>
-        </ComposerPrimitive.Dictate>
-
+      <AuiIf condition={(s) => !s.thread.isRunning && s.composer.isEmpty}>
         <AuiIf condition={(s) => s.thread.capabilities.voice}>
           <TooltipIconButton
             type="button"
-            tooltip="开始语音模式"
+            tooltip="开始实时语音"
             side="top"
-            aria-label="开始语音模式"
+            aria-label="开始实时语音"
             onClick={connect}
             className="flex size-9 items-center justify-center rounded-full bg-[#0d0d0d] text-white hover:bg-[#2f2f2f] dark:bg-white dark:text-black dark:hover:bg-[#e7e7e7]"
           >
@@ -240,7 +208,7 @@ const VoiceModeOverlay: FC = () => {
       ? "麦克风已静音"
       : isListening
         ? "我在听，请说话"
-        : "正在调用 Agent 并生成语音";
+        : "正在检索或生成实时语音回复";
   const orbState: VoiceOrbState = isStarting
     ? "connecting"
     : voice.isMuted
@@ -366,106 +334,6 @@ const EditComposer: FC = () => {
 const assistantActionClassName =
   "flex size-8 items-center justify-center rounded-lg text-[#5d5d5d] transition-colors hover:bg-black/[0.07] hover:text-[#5d5d5d] dark:text-[#cdcdcd] dark:hover:bg-white/15 dark:hover:text-[#cdcdcd]";
 
-type SpeakStatus = "idle" | "loading" | "playing" | "error";
-
-const SPEAK_TOOLTIP_TEXT: Record<SpeakStatus, string> = {
-  idle: "朗读",
-  loading: "停止语音合成",
-  playing: "停止朗读",
-  error: "合成失败，点击重试",
-};
-
-const SpeakMessageButton: FC = () => {
-  const [status, setStatus] = useState<SpeakStatus>("idle");
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const messageText = useAuiState((s) => {
-    const parts: string[] = [];
-    for (const part of s.message.content) {
-      if (part.type === "text" && part.text.trim()) {
-        parts.push(part.text.trim());
-      }
-    }
-    return parts.join("\n\n");
-  });
-
-  const stopPlayback = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    if (audioRef.current !== null) {
-      audioRef.current.onended = null;
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (objectUrlRef.current !== null) {
-      URL.revokeObjectURL(objectUrlRef.current);
-      objectUrlRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => stopPlayback, [stopPlayback]);
-
-  const startPlayback = useCallback(async () => {
-    if (!messageText) return;
-    stopPlayback();
-    setStatus("loading");
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      const audioData = await synthesizeSpeech(messageText, controller.signal);
-      if (controller.signal.aborted) return;
-      const objectUrl = URL.createObjectURL(new Blob([audioData], { type: "audio/wav" }));
-      objectUrlRef.current = objectUrl;
-      const audio = new Audio(objectUrl);
-      audioRef.current = audio;
-      audio.onended = () => {
-        stopPlayback();
-        setStatus("idle");
-      };
-      await audio.play();
-      setStatus("playing");
-    } catch (error) {
-      if (controller.signal.aborted) {
-        setStatus("idle");
-        return;
-      }
-      console.error("语音合成或播放失败", error);
-      stopPlayback();
-      setStatus("error");
-    }
-  }, [messageText, stopPlayback]);
-
-  const handleToggle = () => {
-    if (status === "loading" || status === "playing") {
-      stopPlayback();
-      setStatus("idle");
-      return;
-    }
-    void startPlayback();
-  };
-
-  return (
-    <TooltipIconButton
-      type="button"
-      tooltip={SPEAK_TOOLTIP_TEXT[status]}
-      side="top"
-      aria-label={SPEAK_TOOLTIP_TEXT[status]}
-      disabled={!messageText}
-      onClick={handleToggle}
-      className={assistantActionClassName}
-    >
-      {status === "loading" ? (
-        <LoaderCircle className="size-5 animate-spin motion-reduce:animate-none" />
-      ) : status === "playing" ? (
-        <VolumeX className="size-5" />
-      ) : (
-        <Volume2 className="size-5" />
-      )}
-    </TooltipIconButton>
-  );
-};
-
 const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative mx-auto flex w-full max-w-3xl flex-col">
@@ -474,7 +342,10 @@ const AssistantMessage: FC = () => {
           {({ part }) => {
             if (part.type === "text") return <MarkdownText />;
             if (part.type === "image") return <ImageMessagePart {...part} />;
-            if (part.type === "tool-call") return part.toolUI ?? <ToolFallback {...part} />;
+            if (part.type === "tool-call") {
+              if (isMcpToolOperation(part.toolName)) return <ChatToolStatus {...part} />;
+              return part.toolUI ?? <ToolFallback {...part} />;
+            }
             return null;
           }}
         </MessagePrimitive.Parts>
@@ -510,7 +381,6 @@ const AssistantMessage: FC = () => {
               <ThumbsDown className="size-5" />
             </TooltipIconButton>
           </ActionBarPrimitive.FeedbackNegative>
-          <SpeakMessageButton />
           <TooltipIconButton tooltip="Share" side="top" className={assistantActionClassName}>
             <Share className="size-5" />
           </TooltipIconButton>

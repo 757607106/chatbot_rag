@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
 
 
 class ConfigurationError(ValueError):
@@ -59,10 +60,15 @@ class Settings:
     chunk_overlap: int = 64
     rag_top_k: int = 5
     max_upload_bytes: int = 50 * 1024 * 1024
-    asr_model_name: str = "qwen3-asr-flash"
-    asr_language: str = "zh"
-    tts_model_name: str = "qwen-audio-3.0-tts-plus"
-    tts_voice: str = "longanlingxin"
+    realtime_voice_model_name: str = "qwen-audio-3.0-realtime-flash"
+    realtime_voice_name: str = "longanqian"
+    realtime_voice_base_url: str = (
+        "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    )
+    realtime_voice_allowed_origins: tuple[str, ...] = (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    )
     mcp_servers: tuple[McpServerDefinition, ...] = ()
 
     @classmethod
@@ -166,22 +172,24 @@ class Settings:
             "CHATBOT_MAX_UPLOAD_MB",
             50,
         )
-        asr_model_name = source.get(
-            "CHATBOT_ASR_MODEL",
-            "qwen3-asr-flash",
+        realtime_voice_model_name = source.get(
+            "CHATBOT_REALTIME_VOICE_MODEL",
+            "qwen-audio-3.0-realtime-flash",
         ).strip()
-        asr_language = source.get(
-            "CHATBOT_ASR_LANGUAGE",
-            "zh",
+        realtime_voice_name = source.get(
+            "CHATBOT_REALTIME_VOICE_NAME",
+            "longanqian",
         ).strip()
-        tts_model_name = source.get(
-            "CHATBOT_TTS_MODEL",
-            "qwen-audio-3.0-tts-plus",
+        realtime_voice_base_url = source.get(
+            "CHATBOT_REALTIME_VOICE_BASE_URL",
+            "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
         ).strip()
-        tts_voice = source.get(
-            "CHATBOT_TTS_VOICE",
-            "longanlingxin",
-        ).strip()
+        realtime_voice_allowed_origins = _read_http_origins(
+            source.get(
+                "CHATBOT_REALTIME_VOICE_ALLOWED_ORIGINS",
+                "http://localhost:3000,http://127.0.0.1:3000",
+            ),
+        )
         mcp_servers = _read_mcp_servers(
             source.get("CHATBOT_MCP_SERVERS_JSON", ""),
         )
@@ -209,6 +217,7 @@ class Settings:
                 "CHATBOT_KNOWLEDGE_BASE_NAME must contain only letters, "
                 "numbers, dots, underscores, or hyphens",
             )
+        _validate_realtime_voice_base_url(realtime_voice_base_url)
         return cls(
             dashscope_api_key=api_key,
             model_name=model_name or "qwen-plus",
@@ -244,12 +253,58 @@ class Settings:
             chunk_overlap=chunk_overlap,
             rag_top_k=rag_top_k,
             max_upload_bytes=max_upload_megabytes * 1024 * 1024,
-            asr_model_name=asr_model_name or "qwen3-asr-flash",
-            asr_language=asr_language or "zh",
-            tts_model_name=tts_model_name or "qwen-audio-3.0-tts-plus",
-            tts_voice=tts_voice or "longanlingxin",
+            realtime_voice_model_name=(
+                realtime_voice_model_name
+                or "qwen-audio-3.0-realtime-flash"
+            ),
+            realtime_voice_name=realtime_voice_name or "longanqian",
+            realtime_voice_base_url=realtime_voice_base_url,
+            realtime_voice_allowed_origins=realtime_voice_allowed_origins,
             mcp_servers=mcp_servers,
         )
+
+
+def _validate_realtime_voice_base_url(value: str) -> None:
+    """校验仅由服务端使用的百炼实时语音端点。"""
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "wss"
+        or not parsed.hostname
+        or not parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ConfigurationError(
+            "CHATBOT_REALTIME_VOICE_BASE_URL must be a wss URL without "
+            "query parameters or fragments",
+        )
+
+
+def _read_http_origins(raw_value: str) -> tuple[str, ...]:
+    """读取浏览器 WebSocket Origin 允许列表。"""
+    origins: list[str] = []
+    for raw_origin in raw_value.split(","):
+        origin = raw_origin.strip().rstrip("/")
+        if not origin or origin in origins:
+            continue
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ConfigurationError(
+                "CHATBOT_REALTIME_VOICE_ALLOWED_ORIGINS must contain only "
+                "HTTP origins",
+            )
+        origins.append(origin)
+    if not origins:
+        raise ConfigurationError(
+            "CHATBOT_REALTIME_VOICE_ALLOWED_ORIGINS must not be empty",
+        )
+    return tuple(origins)
 
 
 def _read_mcp_servers(

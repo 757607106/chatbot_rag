@@ -8,6 +8,8 @@ from chatbot_rag.schemas.chat_schema import (
     ChatMessageStartEvent,
     ChatStreamRequest,
     ChatTextDeltaEvent,
+    ChatToolStatusEvent,
+    McpToolOperation,
 )
 from chatbot_rag.schemas.knowledge_schema import (
     ChunkMediaResponse,
@@ -27,12 +29,9 @@ from chatbot_rag.schemas.knowledge_schema import (
     RetrievalTestRequest,
     RetrievalTestResponse,
 )
-from chatbot_rag.schemas.speech_schema import (
-    MAX_ASR_AUDIO_BYTES,
-    MAX_TTS_TEXT_LENGTH,
-    SUPPORTED_ASR_MEDIA_TYPES,
-    SpeechRecognitionResponse,
-    SpeechSynthesisRequest,
+from chatbot_rag.schemas.voice_schema import (
+    MAX_REALTIME_AUDIO_BYTES,
+    RealtimeAudioAppendEvent,
 )
 
 __all__ = [
@@ -42,6 +41,7 @@ __all__ = [
     "ChatMessageEndEvent",
     "ChatMessageStartEvent",
     "ChatStreamRequest",
+    "ChatToolStatusEvent",
     "ChunkMediaResponse",
     "KnowledgeChunkListResponse",
     "KnowledgeChunkResponse",
@@ -55,13 +55,11 @@ __all__ = [
     "KnowledgeDocumentVersionResponse",
     "KnowledgeJobResponse",
     "KnowledgeMutationResponse",
-    "MAX_TTS_TEXT_LENGTH",
-    "MAX_ASR_AUDIO_BYTES",
+    "MAX_REALTIME_AUDIO_BYTES",
     "RetrievalCandidateResponse",
     "RetrievalTestRequest",
     "RetrievalTestResponse",
-    "SpeechSynthesisRequest",
-    "SpeechRecognitionResponse",
-    "SUPPORTED_ASR_MEDIA_TYPES",
+    "RealtimeAudioAppendEvent",
     "ChatTextDeltaEvent",
+    "McpToolOperation",
 ]

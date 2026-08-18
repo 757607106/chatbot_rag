@@ -15,13 +15,10 @@ from chatbot_rag.services.knowledge_service import (
     ManagedDocument,
     ManagedMediaReference,
 )
-from chatbot_rag.services.speech_synthesis_service import (
-    SpeechSynthesisError,
-    SpeechSynthesisService,
-)
-from chatbot_rag.services.speech_recognition_service import (
-    SpeechRecognitionError,
-    SpeechRecognitionService,
+from chatbot_rag.services.realtime_voice_service import (
+    RealtimeVoiceClientProtocolError,
+    RealtimeVoiceService,
+    RealtimeVoiceUpstreamError,
 )
 
 __all__ = [
@@ -37,8 +34,7 @@ __all__ = [
     "ManagedChunkPage",
     "ManagedDocument",
     "ManagedMediaReference",
-    "SpeechSynthesisError",
-    "SpeechSynthesisService",
-    "SpeechRecognitionError",
-    "SpeechRecognitionService",
+    "RealtimeVoiceClientProtocolError",
+    "RealtimeVoiceService",
+    "RealtimeVoiceUpstreamError",
 ]

@@ -74,21 +74,21 @@ async def test_encode_chat_stream_maps_text_lifecycle() -> None:
     )
 
     assert result == [
-        {"version": 2, "type": "message_start", "message_id": "reply"},
+        {"version": 3, "type": "message_start", "message_id": "reply"},
         {
-            "version": 2,
+            "version": 3,
             "type": "text_delta",
             "message_id": "reply",
             "text": "你好",
         },
         {
-            "version": 2,
+            "version": 3,
             "type": "text_delta",
             "message_id": "reply",
             "text": "。",
         },
         {
-            "version": 2,
+            "version": 3,
             "type": "message_end",
             "message_id": "reply",
             "finish_reason": "completed",
@@ -133,7 +133,7 @@ async def test_encode_chat_stream_rejects_delta_before_start() -> None:
 
     assert result == [
         {
-            "version": 2,
+            "version": 3,
             "type": "error",
             "code": "protocol_error",
             "message": "回复流格式无效，请重试。",
@@ -155,6 +155,138 @@ async def test_encode_chat_stream_reports_incomplete_stream() -> None:
     )
 
     assert result[-1]["code"] == "incomplete_stream"
+
+
+@pytest.mark.asyncio
+async def test_encode_chat_stream_exposes_sanitized_mcp_status() -> None:
+    """MCP 状态应使用公共业务操作且不泄露内部名称和结果。"""
+    result = await _decode(
+        _events(
+            ReplyStartEvent(
+                session_id="session",
+                reply_id="reply",
+                name="assistant",
+            ),
+            ToolResultStartEvent(
+                reply_id="reply",
+                tool_call_id="internal-call-id",
+                tool_call_name=(
+                    "mcp__yunprint-billing__listSalesOrders"
+                ),
+            ),
+            ToolResultTextDeltaEvent(
+                reply_id="reply",
+                tool_call_id="internal-call-id",
+                delta='{"customerPhone":"13800000000"}',
+            ),
+            ToolResultEndEvent(
+                reply_id="reply",
+                tool_call_id="internal-call-id",
+                state=ToolResultState.SUCCESS,
+            ),
+            TextBlockDeltaEvent(
+                reply_id="reply",
+                block_id="text",
+                delta="查询完成。",
+            ),
+            ReplyEndEvent(
+                session_id="session",
+                reply_id="reply",
+            ),
+        ),
+    )
+
+    assert result == [
+        {
+            "version": 3,
+            "type": "message_start",
+            "message_id": "reply",
+        },
+        {
+            "version": 3,
+            "type": "tool_status",
+            "message_id": "reply",
+            "tool_call_id": "mcp-1",
+            "operation": "list_sales_orders",
+            "status": "running",
+        },
+        {
+            "version": 3,
+            "type": "tool_status",
+            "message_id": "reply",
+            "tool_call_id": "mcp-1",
+            "operation": "list_sales_orders",
+            "status": "completed",
+        },
+        {
+            "version": 3,
+            "type": "text_delta",
+            "message_id": "reply",
+            "text": "查询完成。",
+        },
+        {
+            "version": 3,
+            "type": "message_end",
+            "message_id": "reply",
+            "finish_reason": "completed",
+        },
+    ]
+    encoded = json.dumps(result, ensure_ascii=False)
+    assert "yunprint-billing" not in encoded
+    assert "listSalesOrders" not in encoded
+    assert "13800000000" not in encoded
+
+
+@pytest.mark.asyncio
+async def test_encode_chat_stream_marks_failed_mcp_status() -> None:
+    """MCP 执行未成功时应只公开失败状态。"""
+    result = await _decode(
+        _events(
+            ReplyStartEvent(
+                session_id="session",
+                reply_id="reply",
+                name="assistant",
+            ),
+            ToolResultStartEvent(
+                reply_id="reply",
+                tool_call_id="failed-call",
+                tool_call_name="mcp__another-server__unknownTool",
+            ),
+            ToolResultEndEvent(
+                reply_id="reply",
+                tool_call_id="failed-call",
+                state=ToolResultState.ERROR,
+            ),
+            ReplyEndEvent(
+                session_id="session",
+                reply_id="reply",
+            ),
+        ),
+    )
+
+    statuses = [
+        event
+        for event in result
+        if event["type"] == "tool_status"
+    ]
+    assert statuses == [
+        {
+            "version": 3,
+            "type": "tool_status",
+            "message_id": "reply",
+            "tool_call_id": "mcp-1",
+            "operation": "external_business",
+            "status": "running",
+        },
+        {
+            "version": 3,
+            "type": "tool_status",
+            "message_id": "reply",
+            "tool_call_id": "mcp-1",
+            "operation": "external_business",
+            "status": "failed",
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -218,7 +350,7 @@ async def test_encode_chat_stream_places_retrieved_media_at_reference(
         "message_end",
     ]
     assert result[2] == {
-        "version": 2,
+        "version": 3,
         "type": "image_part",
         "message_id": "reply",
         "url": f"/api/media/{asset_id}",

@@ -5,41 +5,38 @@ import {
   type VoiceSessionHelpers,
 } from "@assistant-ui/react";
 
-import { transcribeSpeech } from "@/features/chat/api/asr-client";
-import { synthesizeSpeech } from "@/features/chat/api/tts-client";
 import { getAudioInputErrorMessage } from "@/features/chat/runtime/audio-input-error";
 import {
-  streamAssistantReply,
-  type ChatInputMessage,
-} from "@/features/chat/runtime/chat-model-adapter";
+  bytesToBase64,
+  calculateAudioVolume,
+  Pcm16Resampler,
+  PcmByteChunker,
+} from "@/features/chat/runtime/pcm-audio";
+import { PcmPlaybackQueue } from "@/features/chat/runtime/pcm-playback-queue";
 import {
-  calculateSpeechThreshold,
-  calculateVisualVolume,
-  measureVoiceLevel,
-} from "@/features/chat/runtime/voice-activity";
+  getRealtimeVoiceUrl,
+  parseRealtimeVoiceServerEvent,
+} from "@/features/chat/runtime/realtime-voice-protocol";
+import {
+  type VoiceTranscriptRecord,
+  VoiceTranscriptLedger,
+} from "@/features/chat/runtime/voice-transcript";
 
 type ServerVoiceAdapterOptions = {
   onError?: (message: string) => void;
+  onConversationEnd?: (records: readonly VoiceTranscriptRecord[]) => void;
 };
 
-const PREFERRED_MEDIA_TYPES = [
-  "audio/webm;codecs=opus",
-  "audio/webm",
-  "audio/mp4",
-  "audio/ogg;codecs=opus",
-] as const;
-const END_OF_TURN_SILENCE_MS = 900;
-const MAX_RECORDING_MS = 30_000;
-const SPEECH_CONFIRMATION_MS = 80;
-const MAX_VOLUME_FRAME_MS = 50;
+const SESSION_START_TIMEOUT_MS = 10_000;
 
 export function isServerVoiceSupported(): boolean {
   return (
     typeof window !== "undefined" &&
     window.isSecureContext &&
     typeof navigator.mediaDevices?.getUserMedia === "function" &&
-    typeof MediaRecorder !== "undefined" &&
-    typeof AudioContext !== "undefined"
+    typeof AudioContext !== "undefined" &&
+    typeof AudioWorkletNode !== "undefined" &&
+    typeof WebSocket !== "undefined"
   );
 }
 
@@ -61,11 +58,12 @@ export class ServerVoiceAdapter implements RealtimeVoiceAdapter {
     if (!isServerVoiceSupported()) {
       throw new Error(
         typeof window !== "undefined" && !window.isSecureContext
-          ? "语音模式需要 HTTPS；在运行服务的本机调试时也可使用 localhost。"
-          : "当前浏览器不支持语音模式，请使用最新版 Chrome、Edge 或 Safari。",
+          ? "实时语音需要 HTTPS；在运行服务的本机调试时也可使用 localhost。"
+          : "当前浏览器不支持实时语音，请使用最新版 Chrome、Edge 或 Safari。",
       );
     }
 
+    const websocketUrl = getRealtimeVoiceUrl();
     const audioContext = new AudioContext();
     let stream: MediaStream;
     try {
@@ -77,243 +75,218 @@ export class ServerVoiceAdapter implements RealtimeVoiceAdapter {
           noiseSuppression: true,
         },
       });
+      await audioContext.audioWorklet.addModule("/pcm-capture-worklet.js");
     } catch (error) {
       void audioContext.close();
       throw error;
     }
+
     const inputSource = audioContext.createMediaStreamSource(stream);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.35;
+    const worklet = new AudioWorkletNode(audioContext, "pcm-capture");
     const silentOutput = audioContext.createGain();
     silentOutput.gain.value = 0;
-    inputSource.connect(analyser);
-    analyser.connect(silentOutput);
+    inputSource.connect(worklet);
+    worklet.connect(silentOutput);
     silentOutput.connect(audioContext.destination);
-    await audioContext.resume();
 
-    const samples = new Float32Array(analyser.fftSize);
-    const conversation: ChatInputMessage[] = [];
-    let recorder: MediaRecorder | null = null;
-    let animationFrame: number | null = null;
-    let activeRequest: AbortController | null = null;
-    let playbackSource: AudioBufferSourceNode | null = null;
-    let resolvePlayback: (() => void) | null = null;
+    const websocket = new WebSocket(websocketUrl);
+    const resampler = new Pcm16Resampler(audioContext.sampleRate);
+    const chunker = new PcmByteChunker();
+    const playback = new PcmPlaybackQueue(audioContext);
+    const transcriptLedger = new VoiceTranscriptLedger();
     let disposed = false;
     let muted = false;
-    let busy = false;
-    let discardRecording = false;
+    let ready = false;
+    let currentMode: "listening" | "speaking" = "listening";
+    let assistantTranscript = "";
+    let startTimeout: number | undefined;
 
-    const stopAnimation = (): void => {
-      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
-      animationFrame = null;
-      helpers.emitVolume(0);
+    const emitMode = (mode: "listening" | "speaking"): void => {
+      currentMode = mode;
+      helpers.emitMode(mode);
     };
 
-    const stopPlayback = (): void => {
-      if (playbackSource !== null) {
-        playbackSource.onended = null;
-        try {
-          playbackSource.stop();
-        } catch {
-          // 已自然结束的 AudioBufferSourceNode 无需再次停止。
-        }
-        playbackSource.disconnect();
-        playbackSource = null;
-      }
-      const finishPlayback = resolvePlayback;
-      resolvePlayback = null;
-      finishPlayback?.();
-    };
-
-    const dispose = (): void => {
+    const cleanup = (): void => {
       if (disposed) return;
       disposed = true;
-      discardRecording = true;
-      stopAnimation();
-      activeRequest?.abort();
-      activeRequest = null;
-      stopPlayback();
-      if (recorder?.state === "recording") recorder.stop();
-      recorder = null;
+      ready = false;
+      if (startTimeout !== undefined) window.clearTimeout(startTimeout);
+      helpers.emitVolume(0);
+      playback.clear();
+      worklet.port.onmessage = null;
       inputSource.disconnect();
-      analyser.disconnect();
+      worklet.disconnect();
       silentOutput.disconnect();
       for (const track of stream.getTracks()) track.stop();
+      if (websocket.readyState === WebSocket.CONNECTING) {
+        websocket.addEventListener("open", () => websocket.close(1000), {
+          once: true,
+        });
+      } else if (websocket.readyState === WebSocket.OPEN) {
+        websocket.close(1000);
+      }
       void audioContext.close();
-    };
-
-    const fail = (error: unknown): void => {
-      if (disposed) return;
-      const message = getAudioInputErrorMessage(error);
-      console.warn("语音模式运行失败", error);
-      this.options.onError?.(message);
-      helpers.end("error", error);
-      dispose();
-    };
-
-    const playAudio = async (audio: ArrayBuffer): Promise<void> => {
-      await audioContext.resume();
-      const decoded = await audioContext.decodeAudioData(audio.slice(0));
-      if (disposed) return;
-      await new Promise<void>((resolve) => {
-        const source = audioContext.createBufferSource();
-        source.buffer = decoded;
-        source.connect(audioContext.destination);
-        playbackSource = source;
-        resolvePlayback = resolve;
-        source.onended = () => {
-          source.disconnect();
-          if (playbackSource === source) playbackSource = null;
-          resolvePlayback = null;
-          resolve();
-        };
-        source.start();
-      });
-    };
-
-    const runAgentTurn = async (blob: Blob): Promise<void> => {
-      const controller = new AbortController();
-      activeRequest = controller;
-      try {
-        helpers.emitMode("speaking");
-        helpers.emitVolume(0);
-        const transcription = await transcribeSpeech(blob, controller.signal);
-        if (disposed) return;
-        const userTurn: ChatInputMessage = { role: "user", content: transcription.text };
-        conversation.push(userTurn);
-        helpers.emitTranscript({ role: "user", text: transcription.text, isFinal: true });
-
-        let assistantText = "";
-        for await (const update of streamAssistantReply(conversation, controller.signal)) {
-          const nextText = (update.content ?? [])
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n")
-            .trim();
-          if (!nextText || nextText === assistantText) continue;
-          assistantText = nextText;
-          helpers.emitTranscript({ role: "assistant", text: assistantText, isFinal: false });
+      const records = transcriptLedger.snapshot();
+      if (records.length > 0) {
+        try {
+          this.options.onConversationEnd?.(records);
+        } catch (error) {
+          console.warn("实时语音文字记录写入失败", error);
+          this.options.onError?.("语音已结束，但文字记录保存失败。");
         }
-        if (!assistantText) throw new Error("Agent 没有返回可朗读的文本回复。");
-        conversation.push({ role: "assistant", content: assistantText });
-        helpers.emitTranscript({ role: "assistant", text: assistantText, isFinal: true });
-
-        const audio = await synthesizeSpeech(assistantText, controller.signal);
-        if (!disposed) await playAudio(audio);
-      } finally {
-        if (activeRequest === controller) activeRequest = null;
       }
     };
 
-    const selectMediaType = (): string | undefined =>
-      PREFERRED_MEDIA_TYPES.find((type) => MediaRecorder.isTypeSupported(type));
+    let resolveReady: () => void = () => undefined;
+    let rejectReady: (error: Error) => void = () => undefined;
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+    startTimeout = window.setTimeout(() => {
+      rejectReady(new Error("实时语音连接超时，请稍后重试。"));
+    }, SESSION_START_TIMEOUT_MS);
 
-    const startListeningTurn = (): void => {
-      if (disposed || muted || busy) return;
-      busy = true;
-      discardRecording = false;
-      const chunks: BlobPart[] = [];
-      const mediaType = selectMediaType();
-      recorder = mediaType
-        ? new MediaRecorder(stream, { mimeType: mediaType })
-        : new MediaRecorder(stream);
-      const currentRecorder = recorder;
-      let detectedSpeech = false;
-      let lastSpeechAt = 0;
-      let speechEvidenceMs = 0;
-      let noiseFloor: number | null = null;
-      const startedAt = performance.now();
-      let previousVolumeAt = startedAt;
-
-      currentRecorder.addEventListener("dataavailable", (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      });
-      currentRecorder.addEventListener("error", (event) => fail(event), { once: true });
-      currentRecorder.addEventListener(
-        "stop",
-        () => {
-          stopAnimation();
-          recorder = null;
-          const shouldDiscard = discardRecording || !detectedSpeech;
-          if (shouldDiscard) {
-            busy = false;
-            if (!disposed && !muted) startListeningTurn();
-            return;
-          }
-          const blob = new Blob(chunks, {
-            type: currentRecorder.mimeType || "audio/webm",
-          });
-          void runAgentTurn(blob)
-            .then(() => {
-              busy = false;
-              if (!disposed && !muted) {
-                helpers.emitMode("listening");
-                startListeningTurn();
-              }
-            })
-            .catch(fail);
-        },
-        { once: true },
-      );
-      currentRecorder.start(250);
-      helpers.emitMode("listening");
-
-      const monitorVolume = (): void => {
-        if (disposed || muted || currentRecorder.state !== "recording") return;
-        if (audioContext.state === "suspended") void audioContext.resume();
-        analyser.getFloatTimeDomainData(samples);
-        const level = measureVoiceLevel(samples);
-        const now = performance.now();
-        const frameDuration = Math.min(MAX_VOLUME_FRAME_MS, now - previousVolumeAt);
-        previousVolumeAt = now;
-
-        if (noiseFloor === null) noiseFloor = Math.min(level, 0.002);
-        const speechThreshold = calculateSpeechThreshold(noiseFloor);
-        const isAboveThreshold = level >= speechThreshold;
-        helpers.emitVolume(calculateVisualVolume(level, noiseFloor));
-
-        if (isAboveThreshold) {
-          speechEvidenceMs = Math.min(SPEECH_CONFIRMATION_MS, speechEvidenceMs + frameDuration);
-          if (speechEvidenceMs >= SPEECH_CONFIRMATION_MS) detectedSpeech = true;
-        } else {
-          speechEvidenceMs = Math.max(0, speechEvidenceMs - frameDuration * 0.35);
-          if (!detectedSpeech) noiseFloor = noiseFloor * 0.97 + level * 0.03;
-        }
-        if (detectedSpeech && level >= speechThreshold * 0.55) {
-          lastSpeechAt = now;
-        }
-        const reachedEndOfTurn = detectedSpeech && now - lastSpeechAt >= END_OF_TURN_SILENCE_MS;
-        const reachedRecordingLimit = now - startedAt >= MAX_RECORDING_MS;
-        if (reachedEndOfTurn || reachedRecordingLimit) {
-          discardRecording = !detectedSpeech;
-          currentRecorder.stop();
-          return;
-        }
-        animationFrame = requestAnimationFrame(monitorVolume);
-      };
-      animationFrame = requestAnimationFrame(monitorVolume);
+    const fail = (error: unknown): void => {
+      const normalized = error instanceof Error ? error : new Error("实时语音连接异常。");
+      if (!ready) {
+        rejectReady(normalized);
+        return;
+      }
+      if (disposed) return;
+      console.warn("实时语音会话失败", normalized);
+      this.options.onError?.(getAudioInputErrorMessage(normalized));
+      helpers.end("error", normalized);
+      cleanup();
     };
 
+    websocket.addEventListener("message", (message) => {
+      if (disposed) return;
+      if (typeof message.data !== "string") {
+        fail(new Error("实时语音服务返回了非文本事件。"));
+        return;
+      }
+      try {
+        const event = parseRealtimeVoiceServerEvent(message.data);
+        switch (event.type) {
+          case "session.ready":
+            if (!ready) {
+              ready = true;
+              window.clearTimeout(startTimeout);
+              resolveReady();
+            }
+            break;
+          case "input.speech_started":
+            transcriptLedger.finishAssistant();
+            playback.clear();
+            assistantTranscript = "";
+            emitMode("listening");
+            break;
+          case "input.speech_stopped":
+            helpers.emitVolume(0);
+            emitMode("speaking");
+            break;
+          case "transcript.user.delta":
+            helpers.emitTranscript({
+              role: "user",
+              text: `${event.text}${event.stash}`,
+              isFinal: false,
+            });
+            break;
+          case "transcript.user.done":
+            transcriptLedger.addUserFinal(event.transcript);
+            helpers.emitTranscript({
+              role: "user",
+              text: event.transcript,
+              isFinal: true,
+            });
+            break;
+          case "transcript.assistant.delta":
+            assistantTranscript += event.delta;
+            transcriptLedger.updateAssistantDraft(assistantTranscript);
+            helpers.emitTranscript({
+              role: "assistant",
+              text: assistantTranscript,
+              isFinal: false,
+            });
+            break;
+          case "transcript.assistant.done":
+            assistantTranscript = event.transcript;
+            transcriptLedger.finishAssistant(event.transcript);
+            helpers.emitTranscript({
+              role: "assistant",
+              text: event.transcript,
+              isFinal: true,
+            });
+            break;
+          case "audio.delta":
+            emitMode("speaking");
+            helpers.emitVolume(playback.enqueue(event.audio));
+            break;
+          case "tool.started":
+            emitMode("speaking");
+            break;
+          case "tool.completed":
+            break;
+          case "response.done":
+            transcriptLedger.finishAssistant();
+            assistantTranscript = "";
+            helpers.emitVolume(0);
+            emitMode("listening");
+            break;
+          case "error":
+            fail(new Error(event.message));
+            break;
+        }
+      } catch (error) {
+        fail(error);
+      }
+    });
+    websocket.addEventListener("error", () => {
+      if (disposed) return;
+      fail(new Error("无法连接实时语音服务，请稍后重试。"));
+    });
+    websocket.addEventListener("close", () => {
+      if (!disposed) fail(new Error("实时语音连接已中断，请重试。"));
+    });
+
+    worklet.port.onmessage = (event: MessageEvent<unknown>): void => {
+      if (!ready || muted || websocket.readyState !== WebSocket.OPEN) return;
+      if (!(event.data instanceof Float32Array)) return;
+      if (currentMode === "listening") {
+        helpers.emitVolume(calculateAudioVolume(event.data));
+      }
+      for (const chunk of chunker.push(resampler.push(event.data))) {
+        websocket.send(
+          JSON.stringify({
+            type: "audio.append",
+            audio: bytesToBase64(chunk),
+          }),
+        );
+      }
+    };
+
+    try {
+      await readyPromise;
+    } catch (error) {
+      window.clearTimeout(startTimeout);
+      cleanup();
+      throw error;
+    }
     helpers.setStatus({ type: "running" });
-    helpers.emitMode("listening");
-    startListeningTurn();
+    emitMode("listening");
 
     return {
-      disconnect: dispose,
+      disconnect: cleanup,
       mute: () => {
         muted = true;
+        helpers.emitVolume(0);
         for (const track of stream.getAudioTracks()) track.enabled = false;
-        if (recorder?.state === "recording") {
-          discardRecording = true;
-          recorder.stop();
-        }
       },
       unmute: () => {
         muted = false;
         for (const track of stream.getAudioTracks()) track.enabled = true;
         void audioContext.resume();
-        if (!busy) startListeningTurn();
       },
     };
   }

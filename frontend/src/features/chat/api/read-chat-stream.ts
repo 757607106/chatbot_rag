@@ -1,7 +1,15 @@
-import { CHAT_PROTOCOL_VERSION, type ChatStreamEvent } from "@/features/chat/schemas/chat-stream";
+import {
+  CHAT_PROTOCOL_VERSION,
+  MCP_TOOL_OPERATIONS,
+  type ChatStreamEvent,
+  type McpToolOperation,
+} from "@/features/chat/schemas/chat-stream";
 
 const MAX_EVENT_LINE_LENGTH = 128 * 1024;
 const MEDIA_URL_PATTERN = /^\/api\/media\/[0-9a-f]{64}$/;
+const MCP_TOOL_CALL_ID_PATTERN = /^mcp-[1-9][0-9]*$/;
+const MCP_TOOL_OPERATION_SET = new Set<string>(MCP_TOOL_OPERATIONS);
+const MCP_TOOL_STATUS_SET = new Set(["running", "completed", "failed"]);
 
 export class ChatStreamProtocolError extends Error {
   constructor(message = "回复流格式无效，请重试。") {
@@ -81,6 +89,18 @@ export function parseChatStreamEvent(line: string): ChatStreamEvent {
         return value as ChatStreamEvent;
       }
       break;
+    case "tool_status":
+      if (
+        typeof value.message_id === "string" &&
+        typeof value.tool_call_id === "string" &&
+        MCP_TOOL_CALL_ID_PATTERN.test(value.tool_call_id) &&
+        isMcpToolOperation(value.operation) &&
+        typeof value.status === "string" &&
+        MCP_TOOL_STATUS_SET.has(value.status)
+      ) {
+        return value as ChatStreamEvent;
+      }
+      break;
     case "message_end":
       if (typeof value.message_id === "string" && value.finish_reason === "completed") {
         return value as ChatStreamEvent;
@@ -98,4 +118,8 @@ export function parseChatStreamEvent(line: string): ChatStreamEvent {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMcpToolOperation(value: unknown): value is McpToolOperation {
+  return typeof value === "string" && MCP_TOOL_OPERATION_SET.has(value);
 }

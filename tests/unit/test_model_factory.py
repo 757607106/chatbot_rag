@@ -1,13 +1,9 @@
 """AgentScope 与百炼模型构造测试。"""
 
-from http import HTTPStatus
-from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from chatbot_rag.config import Settings
-from chatbot_rag.models import asr_factory, model_factory, tts_factory
+from chatbot_rag.models import model_factory, realtime_voice
 
 
 def test_create_chat_model_passes_validated_provider_settings(
@@ -51,75 +47,19 @@ def test_create_chat_model_passes_validated_provider_settings(
     assert parameters.top_p == 0.8
 
 
-def test_create_tts_model_uses_qwen_audio_settings() -> None:
-    """语音工厂应使用同一百炼凭据并关闭模型层流式返回。"""
-    model = tts_factory.create_tts_model(
-        Settings(
-            dashscope_api_key="secret",
-            tts_model_name="qwen-audio-3.0-tts-plus",
-            tts_voice="longanlingxin",
+def test_realtime_voice_factory_builds_model_url_without_exposing_key() -> None:
+    """实时语音工厂应只把模型放入 URL，凭据留在握手 Header。"""
+    factory = realtime_voice.DashScopeRealtimeVoiceConnectionFactory(
+        api_key="secret",
+        base_url=(
+            "wss://workspace.cn-beijing.maas.aliyuncs.com"
+            "/api-ws/v1/realtime"
         ),
+        model_name="qwen-audio-3.0-realtime-flash",
     )
 
-    assert model.credential.api_key.get_secret_value() == "secret"
-    assert model.model == "qwen-audio-3.0-tts-plus"
-    assert model.parameters.voice == "longanlingxin"
-    assert model.stream is False
-
-
-@pytest.mark.asyncio
-async def test_create_asr_model_calls_qwen_with_base64_audio(
-    monkeypatch: Any,
-) -> None:
-    """ASR 模型应使用系统凭据并把录音编码为 Data URL。"""
-    captured: dict[str, object] = {}
-
-    def fake_call(**kwargs: object) -> object:
-        captured.update(kwargs)
-        return SimpleNamespace(
-            status_code=HTTPStatus.OK,
-            output={
-                "choices": [
-                    {
-                        "message": {
-                            "content": [{"text": "你好，云打印"}],
-                            "annotations": [
-                                {
-                                    "language": "zh",
-                                    "emotion": "neutral",
-                                },
-                            ],
-                        },
-                    },
-                ],
-            },
-        )
-
-    monkeypatch.setattr(
-        getattr(asr_factory, "MultiModalConversation"),
-        "call",
-        fake_call,
+    assert factory.url == (
+        "wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime"
+        "?model=qwen-audio-3.0-realtime-flash"
     )
-    model = asr_factory.create_asr_model(
-        Settings(
-            dashscope_api_key="secret",
-            asr_model_name="qwen3-asr-flash",
-            asr_language="zh",
-        ),
-    )
-
-    result = await model.transcribe(b"audio-data", "audio/webm")
-
-    assert result.text == "你好，云打印"
-    assert result.language == "zh"
-    assert result.emotion == "neutral"
-    assert captured["model"] == "qwen3-asr-flash"
-    assert captured["api_key"] == "secret"
-    messages = captured["messages"]
-    assert isinstance(messages, list)
-    audio_url = messages[0]["content"][0]["audio"]
-    assert audio_url == "data:audio/webm;base64,YXVkaW8tZGF0YQ=="
-    assert captured["asr_options"] == {
-        "language": "zh",
-        "enable_itn": True,
-    }
+    assert "secret" not in factory.url

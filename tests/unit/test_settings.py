@@ -100,8 +100,18 @@ def test_settings_use_defaults_for_optional_empty_values() -> None:
     assert settings.qdrant_path == Path(".data/qdrant")
     assert settings.rag_top_k == 5
     assert settings.max_upload_bytes == 50 * 1024 * 1024
-    assert settings.asr_model_name == "qwen3-asr-flash"
-    assert settings.asr_language == "zh"
+    assert (
+        settings.realtime_voice_model_name
+        == "qwen-audio-3.0-realtime-flash"
+    )
+    assert settings.realtime_voice_name == "longanqian"
+    assert settings.realtime_voice_base_url == (
+        "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    )
+    assert settings.realtime_voice_allowed_origins == (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    )
 
 
 def test_settings_reject_missing_api_key() -> None:
@@ -191,41 +201,58 @@ def test_settings_reject_unsafe_resource_id() -> None:
         )
 
 
-def test_settings_default_tts_uses_qwen_audio_model() -> None:
-    """未配置语音环境变量时应默认使用 Qwen-Audio-TTS 旗舰配置。"""
-    settings = Settings.from_env({"DASHSCOPE_API_KEY": "secret"})
-
-    assert settings.tts_model_name == "qwen-audio-3.0-tts-plus"
-    assert settings.tts_voice == "longanlingxin"
-    assert settings.mcp_servers == ()
-
-
-def test_settings_load_custom_tts_configuration() -> None:
-    """语音模型与音色应支持环境变量覆盖。"""
+def test_settings_load_custom_realtime_voice_configuration() -> None:
+    """实时语音模型、音色、端点与浏览器来源应支持显式覆盖。"""
     settings = Settings.from_env(
         {
             "DASHSCOPE_API_KEY": "secret",
-            "CHATBOT_TTS_MODEL": "qwen-audio-3.0-tts-flash",
-            "CHATBOT_TTS_VOICE": "longanhuan_v3.6",
+            "CHATBOT_REALTIME_VOICE_MODEL": "qwen-audio-3.0-realtime-plus",
+            "CHATBOT_REALTIME_VOICE_NAME": "longanlingxin",
+            "CHATBOT_REALTIME_VOICE_BASE_URL": (
+                "wss://workspace.cn-beijing.maas.aliyuncs.com"
+                "/api-ws/v1/realtime"
+            ),
+            "CHATBOT_REALTIME_VOICE_ALLOWED_ORIGINS": (
+                "https://chat.example.com,https://chat.example.com"
+            ),
         },
     )
 
-    assert settings.tts_model_name == "qwen-audio-3.0-tts-flash"
-    assert settings.tts_voice == "longanhuan_v3.6"
-
-
-def test_settings_load_custom_asr_configuration() -> None:
-    """语音识别模型与语言应支持环境变量覆盖。"""
-    settings = Settings.from_env(
-        {
-            "DASHSCOPE_API_KEY": "secret",
-            "CHATBOT_ASR_MODEL": "qwen3-asr-flash-2026-02-10",
-            "CHATBOT_ASR_LANGUAGE": "yue",
-        },
+    assert settings.realtime_voice_model_name == (
+        "qwen-audio-3.0-realtime-plus"
+    )
+    assert settings.realtime_voice_name == "longanlingxin"
+    assert settings.realtime_voice_base_url.startswith("wss://workspace.")
+    assert settings.realtime_voice_allowed_origins == (
+        "https://chat.example.com",
     )
 
-    assert settings.asr_model_name == "qwen3-asr-flash-2026-02-10"
-    assert settings.asr_language == "yue"
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        (
+            "CHATBOT_REALTIME_VOICE_BASE_URL",
+            "https://dashscope.aliyuncs.com/api-ws/v1/realtime",
+            "must be a wss URL",
+        ),
+        (
+            "CHATBOT_REALTIME_VOICE_ALLOWED_ORIGINS",
+            "*",
+            "must contain only HTTP origins",
+        ),
+    ],
+)
+def test_settings_reject_invalid_realtime_voice_network_boundaries(
+    name: str,
+    value: str,
+    message: str,
+) -> None:
+    """实时语音端点与浏览器来源必须使用受控协议。"""
+    with pytest.raises(ConfigurationError, match=message):
+        Settings.from_env(
+            {"DASHSCOPE_API_KEY": "secret", name: value},
+        )
 
 
 def test_settings_parse_mcp_servers_with_direct_headers() -> None:

@@ -2,24 +2,30 @@
 
 ## 未发布
 
-- Voice Mode 视觉按 GPT Voice 构图重做：使用响应音量和会话状态的 Canvas 液态呼吸
-  气泡，底部改为悬浮输入胶囊与静音/结束圆形控制，并保留降低动效和屏幕阅读器状态。
-- Voice Mode 的语音活动检测由固定 RMS 门限改为浮点采样和自适应环境噪声阈值，
-  显式保持 Chrome Web Audio 分析链路运行，支持较轻说话声并放大低电平输入的气泡反馈。
-- 新增服务端语音识别：`POST /api/v1/speech/transcriptions` 使用百炼
-  `qwen3-asr-flash` 转写最大 10 MB 的浏览器录音；输入框麦克风会把识别结果写回
-  assistant-ui Composer，并完整处理权限拒绝、取消、格式错误和上游失败。
-- 新增 Voice Mode：浏览器 VAD 以约一秒静音自动分轮，依次复用服务端 ASR、现有
-  Agent/RAG/MCP 流式聊天和 Qwen TTS，实现可连续问答、静音、恢复与结束的语音交互；
-  模型 Key 仍只从系统环境变量读取。
-- 新增服务端语音合成：`POST /api/v1/speech/tts` 使用百炼 `qwen-audio-3.0-tts-plus`
-  （默认音色 `longanlingxin`）返回完整 WAV；助手消息朗读按钮改为经同源 BFF 调用
-  服务端合成，替换浏览器本地合成，支持合成中停止与失败重试。
+- Web NDJSON 协议升级到版本 3，为文本聊天增加脱敏的 MCP 工具状态；前端使用
+  assistant-ui 原生 `tool-call` part 显示受控中文业务标签，不公开服务器名、真实工具名、
+  参数、原始结果或异常详情。
+- Voice Mode 改为单个百炼 `qwen-audio-3.0-realtime-flash` 双工 WebSocket 会话：
+  浏览器以 20ms PCM16 帧持续上行，服务端同步返回转写和音频增量，前端收到即播放，
+  并使用 `smart_turn` 支持语义分轮和播报打断。
+- 实时语音模型通过 Function Calling 使用 AgentScope 2.0.5 `Toolkit` 中同一个只读
+  `search_knowledge`；工具执行留在服务端，只向浏览器公开脱敏的开始/完成状态。
+- 新增 `WS /api/v1/voice/realtime` 受控协议、PCM 帧校验和 Origin 允许列表；百炼 Key
+  只用于 Python 服务到上游的握手，浏览器使用显式公共 WebSocket 地址。
+- 删除旧的完整录音 ASR、文本 Agent、完整 WAV TTS 串行链路，以及对应的输入框听写、
+  消息朗读、HTTP/BFF API、配置、测试和无职责代码；文本聊天链路保持不变。
+- Voice Mode 保留按会话状态和实时音量驱动的 Canvas 液态气泡、静音/结束控制、降低动效
+  与屏幕阅读器状态。
+- 修复结束 Voice Mode 后文字记录消失：按轮次收集最终用户/助手转写及断开前已生成的助手
+  文字，结束时清除 assistant-ui 临时 voice messages，并原子写入当前 `LocalRuntime`
+  基础分支；不会重复调用文本模型，后续文本提问可继续使用这段语音上下文。
 - 智能体新增 MCP 外部工具能力：`CHATBOT_MCP_SERVERS_JSON` 以标准 `mcpServers`
   JSON 声明 SSE/HTTP 服务器并直接提供完整鉴权 Header；`enableTools`
   可限制模型可见工具，当前示例默认排除下单、作废、更新和同步类变更操作；
   远程工具与 `search_knowledge` 同箱注册，外部业务数据查询与知识检索共用同一
   智能体，工具调用过程不进入公共协议。
+- 完善文本智能体的工具路由提示：混合问题可同时调用知识库与 MCP，并按工具 schema
+  生成参数；工具结果只作为数据证据处理，单类工具失败不阻断已有充分证据的其他部分。
 - 远程 Markdown 图片同时支持 HTTP 和 HTTPS 地址，不再仅限 HTTPS；允许主机配置和
   默认端口约束保持不变（HTTP 默认 80、HTTPS 默认 443）。
 - 对齐 assistant-ui `LocalRuntime` 的状态边界：`ChatModelAdapter` 每次提交当前分支的完整

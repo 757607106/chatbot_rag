@@ -1,6 +1,9 @@
 # ADR 008：服务端语音识别与 Agent Voice Mode
 
-> 状态：已接受。
+> 状态：已被 ADR 009 取代。
+
+该方案的分段 ASR、文本 Agent、分段 TTS、输入框听写和消息朗读代码已删除，不再作为
+兼容路径保留。当前实现见 `009-qwen-audio-realtime-voice.md`。
 
 ## 背景
 

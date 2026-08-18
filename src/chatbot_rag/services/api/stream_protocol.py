@@ -18,7 +18,7 @@ from agentscope.event import (
     ToolResultStartEvent,
     ToolResultTextDeltaEvent,
 )
-from agentscope.message import TextBlock
+from agentscope.message import TextBlock, ToolResultState
 from pydantic import BaseModel
 
 from chatbot_rag.rag import (
@@ -32,6 +32,8 @@ from chatbot_rag.schemas import (
     ChatMessageEndEvent,
     ChatMessageStartEvent,
     ChatTextDeltaEvent,
+    ChatToolStatusEvent,
+    McpToolOperation,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -41,6 +43,15 @@ _MEDIA_REFERENCE_CLOSING = '" />'
 _MEDIA_REFERENCE_TAG = "<chatbot-media"
 _HEX_DIGITS = frozenset("0123456789abcdef")
 _KNOWLEDGE_SEARCH_TOOL_NAME = "search_knowledge"
+_MCP_TOOL_PREFIX = "mcp__"
+_MCP_TOOL_OPERATIONS: dict[str, McpToolOperation] = {
+    "listProducts": "list_products",
+    "searchProducts": "search_products",
+    "searchBillingReferences": "search_billing_references",
+    "previewSalesOrder": "preview_sales_order",
+    "getSalesOrder": "get_sales_order",
+    "listSalesOrders": "list_sales_orders",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +149,8 @@ async def encode_chat_stream(
     emitted_media_asset_ids: set[str] = set()
     inline_media_parser = _InlineMediaParser()
     knowledge_tool_media_parsers: dict[str, _InlineMediaParser] = {}
+    mcp_tool_calls: dict[str, tuple[str, McpToolOperation]] = {}
+    mcp_tool_counter = 0
     has_text_since_image = False
 
     try:
@@ -182,6 +195,25 @@ async def encode_chat_stream(
                     knowledge_tool_media_parsers[event.tool_call_id] = (
                         _InlineMediaParser()
                     )
+                operation = _public_mcp_operation(event.tool_call_name)
+                if operation is not None:
+                    if event.tool_call_id in mcp_tool_calls:
+                        yield _encode_event(_protocol_error())
+                        return
+                    mcp_tool_counter += 1
+                    public_tool_call_id = f"mcp-{mcp_tool_counter}"
+                    mcp_tool_calls[event.tool_call_id] = (
+                        public_tool_call_id,
+                        operation,
+                    )
+                    yield _encode_event(
+                        ChatToolStatusEvent(
+                            message_id=message_id,
+                            tool_call_id=public_tool_call_id,
+                            operation=operation,
+                            status="running",
+                        ),
+                    )
                 continue
 
             if isinstance(event, ToolResultTextDeltaEvent):
@@ -202,6 +234,24 @@ async def encode_chat_stream(
                     yield _encode_event(_protocol_error())
                     return
                 knowledge_tool_media_parsers.pop(event.tool_call_id, None)
+                mcp_tool_call = mcp_tool_calls.pop(
+                    event.tool_call_id,
+                    None,
+                )
+                if mcp_tool_call is not None:
+                    public_tool_call_id, operation = mcp_tool_call
+                    yield _encode_event(
+                        ChatToolStatusEvent(
+                            message_id=message_id,
+                            tool_call_id=public_tool_call_id,
+                            operation=operation,
+                            status=(
+                                "completed"
+                                if event.state == ToolResultState.SUCCESS
+                                else "failed"
+                            ),
+                        ),
+                    )
                 continue
 
             if isinstance(event, TextBlockDeltaEvent):
@@ -289,6 +339,16 @@ def _protocol_error() -> ChatErrorEvent:
         code="protocol_error",
         message="回复流格式无效，请重试。",
     )
+
+
+def _public_mcp_operation(
+    tool_call_name: str,
+) -> McpToolOperation | None:
+    """把内部 MCP 工具名映射为受控的公共业务操作。"""
+    if not tool_call_name.startswith(_MCP_TOOL_PREFIX):
+        return None
+    tool_name = tool_call_name.rpartition("__")[2]
+    return _MCP_TOOL_OPERATIONS.get(tool_name, "external_business")
 
 
 def _extract_hint_media_ids(event: HintBlockEvent) -> list[str]:
