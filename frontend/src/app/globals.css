@@ -136,3 +136,81 @@
     @apply bg-background text-foreground;
   }
 }
+
+.voice-orb-stage {
+  position: relative;
+  width: clamp(11rem, 18vw, 13rem);
+  aspect-ratio: 1;
+  isolation: isolate;
+  transition: transform 140ms ease-out;
+  will-change: transform;
+}
+
+.voice-orb-aura {
+  position: absolute;
+  inset: 12%;
+  z-index: -1;
+  border-radius: 999px;
+  filter: blur(34px);
+  opacity: 0.44;
+  animation: voice-orb-aura 3.6s ease-in-out infinite;
+}
+
+.voice-orb-shell {
+  position: absolute;
+  inset: 1.5%;
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #f4efff;
+  box-shadow: 0 22px 58px -34px rgba(79, 53, 145, 0.22);
+  animation: voice-orb-breathe 3.2s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.voice-orb-stage[data-state="connecting"] .voice-orb-shell {
+  animation-duration: 2.1s;
+}
+
+.voice-orb-stage[data-state="speaking"] .voice-orb-shell {
+  animation-duration: 1.65s;
+}
+
+.voice-orb-stage[data-state="muted"] .voice-orb-shell,
+.voice-orb-stage[data-state="muted"] .voice-orb-aura {
+  animation-duration: 5.4s;
+  opacity: 0.52;
+}
+
+@keyframes voice-orb-breathe {
+  0%,
+  100% {
+    transform: scale(0.965);
+  }
+  50% {
+    transform: scale(1.025);
+  }
+}
+
+@keyframes voice-orb-aura {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 0.46;
+    transform: scale(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-orb-stage {
+    transition: none;
+  }
+
+  .voice-orb-shell,
+  .voice-orb-aura {
+    animation: none;
+  }
+}

@@ -121,6 +121,45 @@ PPTX 和 Excel 当前只解析文本与表格，不抽取图片。向量仍由�
 最终失败时回退到原始向量 Top K，并在服务端记录错误。系统不会把上游响应细节或内部
 `<chatbot-media>` 标记发送给浏览器。
 
+## 语音识别
+
+### `POST /api/v1/speech/transcriptions`
+
+使用 `multipart/form-data` 上传名为 `file` 的录音。支持 AAC、FLAC、MP4/M4A、MP3、
+Ogg/Opus、WAV 和 WebM，文件不能为空且最大 10 MB。成功响应示例：
+
+```json
+{"text":"请查询今天的销售订单。","language":"zh","emotion":"neutral"}
+```
+
+识别模型由 `CHATBOT_ASR_MODEL` 控制，默认 `qwen3-asr-flash`；识别语言由
+`CHATBOT_ASR_LANGUAGE` 控制，默认 `zh`。模型 API Key 与聊天、嵌入和语音合成共用
+服务端 `DASHSCOPE_API_KEY`。音频只在 Python 服务端转换为 Data URL 后调用百炼，
+浏览器不持有 API Key。
+
+错误映射：缺少或空录音返回 `422`；格式不支持返回 `415`；超过 10 MB 返回 `413`；
+上游识别失败返回 `502`；语音识别服务未装配返回 `503`。浏览器请求 Next.js 同源
+`POST /api/speech/transcriptions` BFF，由 BFF 重复执行格式和大小边界校验。
+
+## 语音合成
+
+### `POST /api/v1/speech/tts`
+
+请求体：
+
+```json
+{"text":"要朗读的助手回答"}
+```
+
+`text` 去除首尾空白后不能为空，最长 20,000 字符，与百炼
+`SpeechSynthesizer.call` 当前单次上限一致；额外字段会被拒绝。成功返回
+`audio/wav`（24kHz 单声道 16 位完整
+WAV）与 `Cache-Control: no-store`。合成模型由 `CHATBOT_TTS_MODEL` 控制，默认
+`qwen-audio-3.0-tts-plus`，音色由 `CHATBOT_TTS_VOICE` 控制，默认 `longanlingxin`。
+
+错误映射：文本无效返回 `422`；上游合成失败返回 `502`；语音服务未装配返回 `503`。
+浏览器不直接调用该地址，而是请求 Next.js 同源 `POST /api/speech/tts` BFF。
+
 ## 知识库管理 API
 
 `/api/v1/knowledge/*` 不要求应用内登录或身份请求头。浏览器通过 Next.js

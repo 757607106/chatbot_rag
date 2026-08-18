@@ -1,5 +1,9 @@
 """应用配置。"""
 
-from chatbot_rag.config.settings import ConfigurationError, Settings
+from chatbot_rag.config.settings import (
+    ConfigurationError,
+    McpServerDefinition,
+    Settings,
+)
 
-__all__ = ["ConfigurationError", "Settings"]
+__all__ = ["ConfigurationError", "McpServerDefinition", "Settings"]

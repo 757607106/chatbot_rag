@@ -12,8 +12,11 @@ import {
   ThreadPrimitive,
   useAui,
   useAuiState,
+  useVoiceControls,
+  useVoiceState,
+  useVoiceVolume,
 } from "@assistant-ui/react";
-import { useEffect, useState, type FC, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FC, type ReactNode } from "react";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useShallow } from "zustand/shallow";
 import {
@@ -25,7 +28,9 @@ import {
   ChevronRightIcon,
   CopyIcon,
   Download,
+  LoaderCircle,
   Mic,
+  MicOff,
   MoreHorizontal,
   PencilIcon,
   PlusIcon,
@@ -34,23 +39,28 @@ import {
   ThumbsDown,
   ThumbsUp,
   Volume2,
+  VolumeX,
   XIcon,
 } from "lucide-react";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ImageMessagePart } from "@/components/assistant-ui/image-message-part";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
+import { synthesizeSpeech } from "@/features/chat/api/tts-client";
+import { VoiceOrb, type VoiceOrbState } from "@/features/chat/components/voice-orb";
 import { CloneThreadShell } from "./clone-thread-shell";
 
 type ChatGPTProps = {
   sidebarNavigation?: ReactNode | undefined;
   collapsedSidebarNavigation?: ReactNode | undefined;
   mobileNavigation?: ReactNode | undefined;
+  dictationUnavailableMessage?: string | undefined;
 };
 
 export const ChatGPT: FC<ChatGPTProps> = ({
   sidebarNavigation,
   collapsedSidebarNavigation,
   mobileNavigation,
+  dictationUnavailableMessage,
 }) => {
   return (
     <CloneThreadShell
@@ -60,7 +70,7 @@ export const ChatGPT: FC<ChatGPTProps> = ({
     >
       <ThreadPrimitive.Root className="flex h-full flex-col items-stretch bg-white px-4 text-[#0d0d0d] dark:bg-black dark:text-[#ececec]">
         <AuiIf condition={(s) => s.thread.isEmpty}>
-          <EmptyState />
+          <EmptyState dictationUnavailableMessage={dictationUnavailableMessage} />
         </AuiIf>
 
         <AuiIf condition={(s) => !s.thread.isEmpty}>
@@ -75,32 +85,44 @@ export const ChatGPT: FC<ChatGPTProps> = ({
 
             <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-3xl flex-col gap-2 overflow-visible rounded-t-3xl bg-white pb-2 dark:bg-black">
               <ThreadScrollToBottom />
-              <Composer placeholder="Ask anything" />
+              <Composer
+                placeholder="Ask anything"
+                dictationUnavailableMessage={dictationUnavailableMessage}
+              />
               <p className="text-center text-xs text-[#5d5d5d] dark:text-[#afafaf]">
                 ChatGPT can make mistakes. Check important info.
               </p>
             </ThreadPrimitive.ViewportFooter>
           </ThreadPrimitive.Viewport>
         </AuiIf>
+        <VoiceModeOverlay />
       </ThreadPrimitive.Root>
     </CloneThreadShell>
   );
 };
 
-const EmptyState: FC = () => {
+const EmptyState: FC<{ dictationUnavailableMessage?: string | undefined }> = ({
+  dictationUnavailableMessage,
+}) => {
   return (
     <div className="flex grow flex-col items-center justify-center px-4 pb-[16vh]">
       <div className="mx-auto flex w-full max-w-3xl flex-col items-stretch gap-6">
         <h1 className="text-center text-2xl leading-7 font-normal text-[#0d0d0d] dark:text-[#ececec]">
           Where should we begin?
         </h1>
-        <Composer placeholder="Ask anything" />
+        <Composer
+          placeholder="Ask anything"
+          dictationUnavailableMessage={dictationUnavailableMessage}
+        />
       </div>
     </div>
   );
 };
 
-const Composer: FC<{ placeholder: string }> = ({ placeholder }) => {
+const Composer: FC<{
+  placeholder: string;
+  dictationUnavailableMessage?: string | undefined;
+}> = ({ placeholder, dictationUnavailableMessage }) => {
   return (
     <ComposerPrimitive.Root className="group/composer flex w-full flex-col rounded-[28px] border border-[#e5e5e5] bg-white px-2 py-2 shadow-[0_2px_6px_-2px_rgba(0,0,0,0.05)] focus-within:border-[#d0d0d0] dark:border-transparent dark:bg-[#212121] dark:shadow-[inset_0_0_1px_0_rgba(255,255,255,0.2)] dark:focus-within:border-transparent">
       <AuiIf condition={(s) => s.composer.attachments.length > 0}>
@@ -133,11 +155,19 @@ const Composer: FC<{ placeholder: string }> = ({ placeholder }) => {
           <ComposerPrimaryAction />
         </div>
       </div>
+
+      {dictationUnavailableMessage ? (
+        <p role="status" className="px-3 pt-1 pb-0.5 text-xs text-amber-700 dark:text-amber-300">
+          {dictationUnavailableMessage}
+        </p>
+      ) : null}
     </ComposerPrimitive.Root>
   );
 };
 
 const ComposerPrimaryAction: FC = () => {
+  const { connect } = useVoiceControls();
+
   return (
     <div className="flex items-center gap-1">
       <AuiIf condition={(s) => s.thread.isRunning}>
@@ -170,27 +200,95 @@ const ComposerPrimaryAction: FC = () => {
       >
         <ComposerPrimitive.Dictate asChild>
           <TooltipIconButton
-            tooltip="Dictate"
+            tooltip="语音输入"
             side="top"
-            aria-label="Dictate"
+            aria-label="语音输入"
             className="flex size-9 items-center justify-center rounded-full text-[#5d5d5d] transition-colors hover:bg-black/[0.07] hover:text-[#5d5d5d] dark:text-[#cdcdcd] dark:hover:bg-white/15 dark:hover:text-[#cdcdcd]"
           >
             <Mic className="size-5" />
           </TooltipIconButton>
         </ComposerPrimitive.Dictate>
 
-        <TooltipIconButton
-          type="button"
-          tooltip="Use voice mode"
-          side="top"
-          aria-hidden="true"
-          tabIndex={-1}
-          className="flex size-9 items-center justify-center rounded-full bg-[#0d0d0d] text-white hover:bg-[#0d0d0d] dark:bg-white dark:text-black dark:hover:bg-white"
-        >
-          <AudioLines className="size-5" />
-        </TooltipIconButton>
+        <AuiIf condition={(s) => s.thread.capabilities.voice}>
+          <TooltipIconButton
+            type="button"
+            tooltip="开始语音模式"
+            side="top"
+            aria-label="开始语音模式"
+            onClick={connect}
+            className="flex size-9 items-center justify-center rounded-full bg-[#0d0d0d] text-white hover:bg-[#2f2f2f] dark:bg-white dark:text-black dark:hover:bg-[#e7e7e7]"
+          >
+            <AudioLines className="size-5" />
+          </TooltipIconButton>
+        </AuiIf>
       </AuiIf>
     </div>
+  );
+};
+
+const VoiceModeOverlay: FC = () => {
+  const voice = useVoiceState();
+  const volume = useVoiceVolume();
+  const { disconnect, mute, unmute } = useVoiceControls();
+  if (voice === undefined) return null;
+
+  const isStarting = voice.status.type === "starting";
+  const isListening = !isStarting && voice.mode === "listening";
+  const statusText = isStarting
+    ? "正在连接麦克风"
+    : voice.isMuted
+      ? "麦克风已静音"
+      : isListening
+        ? "我在听，请说话"
+        : "正在调用 Agent 并生成语音";
+  const orbState: VoiceOrbState = isStarting
+    ? "connecting"
+    : voice.isMuted
+      ? "muted"
+      : isListening
+        ? "listening"
+        : "speaking";
+
+  return (
+    <section
+      role="dialog"
+      aria-modal="true"
+      aria-label="语音模式"
+      className="fixed inset-0 z-50 overflow-hidden bg-[#fdfdfd] text-[#111]"
+    >
+      <div className="absolute top-[20%] left-1/2 -translate-x-1/2">
+        <VoiceOrb state={orbState} volume={volume} />
+      </div>
+
+      <p role="status" className="sr-only">
+        {statusText}
+      </p>
+
+      <div className="absolute bottom-4 left-1/2 flex h-14 w-[calc(100%-32px)] max-w-[760px] -translate-x-1/2 items-center rounded-[28px] border border-black/[0.07] bg-white py-1.5 pr-1.5 pl-4 shadow-[0_4px_18px_rgba(0,0,0,0.06)]">
+        <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center">
+          <PlusIcon className="size-5 text-[#333]" />
+        </span>
+        <span className="ml-1 min-w-0 flex-1 truncate text-base text-[#999]">请输入</span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            aria-label={voice.isMuted ? "打开麦克风" : "静音麦克风"}
+            onClick={voice.isMuted ? unmute : mute}
+            className="flex size-10 items-center justify-center rounded-full bg-[#f3f3f3] text-black transition-colors hover:bg-[#e9e9e9] focus-visible:ring-2 focus-visible:ring-black/25 focus-visible:outline-none"
+          >
+            {voice.isMuted ? <Mic className="size-[18px]" /> : <MicOff className="size-[18px]" />}
+          </button>
+          <button
+            type="button"
+            aria-label="结束语音模式"
+            onClick={disconnect}
+            className="flex size-10 items-center justify-center rounded-full bg-[#0d0d0d] text-white transition-colors hover:bg-[#292929] focus-visible:ring-2 focus-visible:ring-black/30 focus-visible:ring-offset-2 focus-visible:outline-none"
+          >
+            <XIcon className="size-5" />
+          </button>
+        </div>
+      </div>
+    </section>
   );
 };
 
@@ -268,6 +366,106 @@ const EditComposer: FC = () => {
 const assistantActionClassName =
   "flex size-8 items-center justify-center rounded-lg text-[#5d5d5d] transition-colors hover:bg-black/[0.07] hover:text-[#5d5d5d] dark:text-[#cdcdcd] dark:hover:bg-white/15 dark:hover:text-[#cdcdcd]";
 
+type SpeakStatus = "idle" | "loading" | "playing" | "error";
+
+const SPEAK_TOOLTIP_TEXT: Record<SpeakStatus, string> = {
+  idle: "朗读",
+  loading: "停止语音合成",
+  playing: "停止朗读",
+  error: "合成失败，点击重试",
+};
+
+const SpeakMessageButton: FC = () => {
+  const [status, setStatus] = useState<SpeakStatus>("idle");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const messageText = useAuiState((s) => {
+    const parts: string[] = [];
+    for (const part of s.message.content) {
+      if (part.type === "text" && part.text.trim()) {
+        parts.push(part.text.trim());
+      }
+    }
+    return parts.join("\n\n");
+  });
+
+  const stopPlayback = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (audioRef.current !== null) {
+      audioRef.current.onended = null;
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (objectUrlRef.current !== null) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => stopPlayback, [stopPlayback]);
+
+  const startPlayback = useCallback(async () => {
+    if (!messageText) return;
+    stopPlayback();
+    setStatus("loading");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const audioData = await synthesizeSpeech(messageText, controller.signal);
+      if (controller.signal.aborted) return;
+      const objectUrl = URL.createObjectURL(new Blob([audioData], { type: "audio/wav" }));
+      objectUrlRef.current = objectUrl;
+      const audio = new Audio(objectUrl);
+      audioRef.current = audio;
+      audio.onended = () => {
+        stopPlayback();
+        setStatus("idle");
+      };
+      await audio.play();
+      setStatus("playing");
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setStatus("idle");
+        return;
+      }
+      console.error("语音合成或播放失败", error);
+      stopPlayback();
+      setStatus("error");
+    }
+  }, [messageText, stopPlayback]);
+
+  const handleToggle = () => {
+    if (status === "loading" || status === "playing") {
+      stopPlayback();
+      setStatus("idle");
+      return;
+    }
+    void startPlayback();
+  };
+
+  return (
+    <TooltipIconButton
+      type="button"
+      tooltip={SPEAK_TOOLTIP_TEXT[status]}
+      side="top"
+      aria-label={SPEAK_TOOLTIP_TEXT[status]}
+      disabled={!messageText}
+      onClick={handleToggle}
+      className={assistantActionClassName}
+    >
+      {status === "loading" ? (
+        <LoaderCircle className="size-5 animate-spin motion-reduce:animate-none" />
+      ) : status === "playing" ? (
+        <VolumeX className="size-5" />
+      ) : (
+        <Volume2 className="size-5" />
+      )}
+    </TooltipIconButton>
+  );
+};
+
 const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative mx-auto flex w-full max-w-3xl flex-col">
@@ -312,11 +510,7 @@ const AssistantMessage: FC = () => {
               <ThumbsDown className="size-5" />
             </TooltipIconButton>
           </ActionBarPrimitive.FeedbackNegative>
-          <ActionBarPrimitive.Speak asChild>
-            <TooltipIconButton tooltip="Read aloud" side="top" className={assistantActionClassName}>
-              <Volume2 className="size-5" />
-            </TooltipIconButton>
-          </ActionBarPrimitive.Speak>
+          <SpeakMessageButton />
           <TooltipIconButton tooltip="Share" side="top" className={assistantActionClassName}>
             <Share className="size-5" />
           </TooltipIconButton>

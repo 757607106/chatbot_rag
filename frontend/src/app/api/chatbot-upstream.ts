@@ -12,3 +12,8 @@ export function getKnowledgeUpstreamUrl(pathname: string): string {
   const root = new URL("../knowledge/", getChatUpstreamUrl());
   return new URL(pathname, root).toString();
 }
+
+export function getSpeechUpstreamUrl(pathname: string): string {
+  const root = new URL("../speech/", getChatUpstreamUrl());
+  return new URL(pathname, root).toString();
+}

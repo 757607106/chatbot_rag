@@ -9,10 +9,12 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 ## 模块职责
 
 - `config`：从环境变量加载并校验应用配置。
-- `models`：创建聊天、嵌入模型，并通过 DashScope SDK 适配 qwen3-rerank。
+- `models`：创建聊天、嵌入、语音识别与语音合成模型，并通过 DashScope SDK 适配
+  qwen3-rerank。
 - `rag`：负责文档与图片解析、媒体资产、切块、幂等索引、Qdrant 生命周期和知识库装配。
-- `agents`：组合聊天模型、系统提示词和 AgentScope `RAGMiddleware`。
-- `services`：向协议适配层提供最终回复和原生事件流聊天用例。
+- `agents`：组合聊天模型、系统提示词和 AgentScope `RAGMiddleware`，并把配置声明的
+  MCP 服务器绑定为同一 `Toolkit` 中的外部工具。
+- `services`：向协议适配层提供最终回复、原生事件流聊天、语音识别和语音合成用例。
 - `services/knowledge_coordinator.py`：维护知识库注册表及每库独立服务生命周期。
 - `services/knowledge_service.py`：组合单个知识库的文档版本、后台任务、切片编辑和召回诊断。
 - `services/api`：FastAPI 协议边界，负责请求校验、事件转换、资源装配和错误映射。
@@ -146,6 +148,58 @@ AgentScope 原生 Parser 读取文本与表格，并显式关闭图片抽取，�
 生成阶段使用低随机性的事实问答参数，并以通用证据契约核对问题中的对象、属性、版本、
 环境、时间与适用条件。实现中不包含某个具体产品或问题的关键词分支。
 
+## MCP 外部工具绑定
+
+`CHATBOT_MCP_SERVERS_JSON` 保存标准 `mcpServers` JSON，包括最终要发送的
+`Authorization` Header；不再对 Header 做二次环境变量占位符展开。仅接受
+`sse` 与 `http` 类型服务器；`agents/mcp_binding.py` 把定义转换为 AgentScope
+`MCPClient`（URL 以 `/sse` 结尾自动走 SSE 传输并携带鉴权 header），并采用无状态
+连接：每次工具调用临时建立会话，默认 HTTP 超时为 30 秒，避免按请求创建
+智能体的架构泄漏长连接。
+可选 `enableTools` 允许列表会下沉为 `MCPClient.enable_tools`。`yunprint-billing`
+默认示例仅开放产品、计费参考和销售单查询/预览；提交、作废、更新和同步类
+工具不在无人工确认的对话工具集中。
+远程工具与 `search_knowledge` 注册进同一个 `Toolkit`，系统提示词要求模型区分
+知识检索与外部业务数据（计费、账单、订单等），外部工具失败时如实说明且不得
+编造数据。工具名、参数和原始结果不进入公共 NDJSON。详见
+`docs/adr/007-speech-synthesis-and-mcp-binding.md`。
+
+## 语音输入与 Voice Mode 链路
+
+```text
+浏览器麦克风 -> MediaRecorder -> 同源 /api/speech/transcriptions BFF
+  -> FastAPI POST /api/v1/speech/transcriptions -> SpeechRecognitionService
+    -> 百炼 qwen3-asr-flash -> 识别文本
+
+普通语音输入：识别文本 -> assistant-ui Composer -> 用户确认后发送
+Voice Mode：VAD 自动分轮 -> 识别文本 -> 既有 /api/chat 流式 Agent
+  -> 同一 Toolkit 中的 RAG/MCP -> qwen-audio-3.0-tts-plus -> Web Audio 播放
+  -> 重新监听下一轮
+```
+
+普通语音输入和 Voice Mode 共用服务端 ASR 边界。默认在检测到用户说话后的约 900ms
+静音结束当前轮次，单轮录音最长 30 秒；Voice Mode 只复用既有 `ChatModelAdapter` 与
+聊天协议，不建立第二套 Agent，因此知识库检索、MCP 工具允许列表和回答约束保持一致。
+录音格式及 10 MB 上限在 Next.js BFF 与 FastAPI 两侧重复校验。麦克风只在浏览器
+安全上下文中启用，用户拒绝权限时给出可恢复提示；音频、模型 Key 和 MCP Header
+不会暴露给前端日志。详见 `docs/adr/008-server-asr-and-agent-voice-mode.md`。
+
+## 语音合成链路
+
+```text
+助手消息朗读按钮 -> features/chat/api/tts-client -> 同源 /api/speech/tts BFF
+  -> FastAPI POST /api/v1/speech/tts -> SpeechSynthesisService
+    -> AgentScope DashScopeCosyVoiceTTSModel（百炼 qwen-audio-3.0-tts-plus
+       WebSocket 合成） -> WAV 音频 -> 浏览器 Audio 播放
+```
+
+合成模型由 `CHATBOT_TTS_MODEL`/`CHATBOT_TTS_VOICE` 配置，默认 plus 专属旗舰音色
+`longanlingxin`；API Key 使用 `DASHSCOPE_API_KEY`，WebSocket 端点可经 dashscope
+原生 `DASHSCOPE_WEBSOCKET_BASE_URL` 覆盖。服务返回非流式完整 WAV（24kHz 单声道
+16 位），单次文本限 20,000 字符。前端朗读按钮状态机为合成中/播放中/失败重试，可随时停止，
+浏览器不持有任何密钥。语音输入和 Voice Mode 复用该合成服务，但保持独立的录音与
+ASR 生命周期。
+
 ## 当前取舍
 
 当前使用 AgentScope 2.0.5 原生 RAG，而不引入 LlamaIndex。开发环境默认使用
@@ -166,9 +220,10 @@ NDJSON，Next.js BFF 负责同源转发，项目 `ChatModelAdapter` 校验并累
 受控值回滚；生产构建不受影响。`next.config.ts` 暂时显式关闭 Strict Mode，且已分别
 用开发服务器和生产构建验证。升级 assistant-ui 时必须重新验证并优先恢复 Strict Mode。
 
-后端当前是请求级无状态生成：对话历史由 LocalRuntime 随当前分支显式提交，服务端不做
-线程持久化、跨请求事件回放或多端同步。聊天附件、公开工具事件、语音和服务端线程
-持久化仍需独立设计与验收。知识库后台上传不是聊天附件协议的一部分。详见
+后端当前是请求级无状态生成：文本界面对话历史由 LocalRuntime 随当前分支显式提交，
+Voice Mode 在一次连接内维护可见的用户/助手文本轮次；服务端不做线程持久化、跨请求
+事件回放或多端同步。聊天附件、公开工具事件和服务端线程持久化仍需独立设计与验收。
+知识库后台上传不是聊天附件协议的一部分。详见
 `docs/adr/003-assistant-ui-web-frontend.md`。
 
 ## 文档图片数据流

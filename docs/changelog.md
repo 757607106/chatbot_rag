@@ -2,6 +2,24 @@
 
 ## 未发布
 
+- Voice Mode 视觉按 GPT Voice 构图重做：使用响应音量和会话状态的 Canvas 液态呼吸
+  气泡，底部改为悬浮输入胶囊与静音/结束圆形控制，并保留降低动效和屏幕阅读器状态。
+- Voice Mode 的语音活动检测由固定 RMS 门限改为浮点采样和自适应环境噪声阈值，
+  显式保持 Chrome Web Audio 分析链路运行，支持较轻说话声并放大低电平输入的气泡反馈。
+- 新增服务端语音识别：`POST /api/v1/speech/transcriptions` 使用百炼
+  `qwen3-asr-flash` 转写最大 10 MB 的浏览器录音；输入框麦克风会把识别结果写回
+  assistant-ui Composer，并完整处理权限拒绝、取消、格式错误和上游失败。
+- 新增 Voice Mode：浏览器 VAD 以约一秒静音自动分轮，依次复用服务端 ASR、现有
+  Agent/RAG/MCP 流式聊天和 Qwen TTS，实现可连续问答、静音、恢复与结束的语音交互；
+  模型 Key 仍只从系统环境变量读取。
+- 新增服务端语音合成：`POST /api/v1/speech/tts` 使用百炼 `qwen-audio-3.0-tts-plus`
+  （默认音色 `longanlingxin`）返回完整 WAV；助手消息朗读按钮改为经同源 BFF 调用
+  服务端合成，替换浏览器本地合成，支持合成中停止与失败重试。
+- 智能体新增 MCP 外部工具能力：`CHATBOT_MCP_SERVERS_JSON` 以标准 `mcpServers`
+  JSON 声明 SSE/HTTP 服务器并直接提供完整鉴权 Header；`enableTools`
+  可限制模型可见工具，当前示例默认排除下单、作废、更新和同步类变更操作；
+  远程工具与 `search_knowledge` 同箱注册，外部业务数据查询与知识检索共用同一
+  智能体，工具调用过程不进入公共协议。
 - 远程 Markdown 图片同时支持 HTTP 和 HTTPS 地址，不再仅限 HTTPS；允许主机配置和
   默认端口约束保持不变（HTTP 默认 80、HTTPS 默认 443）。
 - 对齐 assistant-ui `LocalRuntime` 的状态边界：`ChatModelAdapter` 每次提交当前分支的完整

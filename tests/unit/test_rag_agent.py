@@ -6,7 +6,7 @@ import pytest
 from agentscope.rag import KnowledgeBase
 
 from chatbot_rag.agents import rag_agent
-from chatbot_rag.config import Settings
+from chatbot_rag.config import McpServerDefinition, Settings
 
 
 @pytest.mark.asyncio
@@ -54,6 +54,11 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
     monkeypatch.setattr(rag_agent, "RAGMiddleware", FakeRagMiddleware)
     monkeypatch.setattr(rag_agent, "Toolkit", FakeToolkit)
     monkeypatch.setattr(rag_agent, "create_chat_model", lambda settings: model)
+    monkeypatch.setattr(
+        rag_agent,
+        "create_mcp_clients",
+        lambda definitions: [],
+    )
 
     await rag_agent.create_rag_agent(
         Settings(dashscope_api_key="secret", rag_top_k=7),
@@ -70,7 +75,7 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
     )
     assert agent_kwargs["middlewares"]
     assert agent_kwargs["toolkit"].__class__ is FakeToolkit
-    assert captured["toolkit"] == {"tools": [search_tool]}
+    assert captured["toolkit"] == {"tools": [search_tool], "mcps": []}
     assert rag_parameters == [
         {"mode": "agentic", "top_k": 7},
     ]
@@ -93,3 +98,64 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
     assert "每个步骤或说明段落最多引用 1 张图" in system_prompt
     assert "禁止把标记集中到回答末尾" in system_prompt
     assert "本地、Web" not in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_create_rag_agent_registers_configured_mcp_servers(
+    monkeypatch: Any,
+) -> None:
+    """配置声明 MCP 服务器时应转换为客户端并注入工具箱。"""
+    captured: dict[str, object] = {}
+    knowledge_base = cast(KnowledgeBase, object())
+    mcp_client = object()
+    definitions = (
+        McpServerDefinition(
+            name="yunprint-billing",
+            url="https://test-mcp-server.yuncyb.com/sse",
+            headers={"Authorization": "Bearer token"},
+        ),
+    )
+
+    class FakeRagMiddleware:
+        """返回空工具列表的中间件替身。"""
+
+        class Parameters:
+            """接收 RAG 参数的替身。"""
+
+            def __init__(self, **kwargs: object) -> None:
+                """忽略参数。"""
+
+        def __init__(self, **kwargs: object) -> None:
+            """忽略构造参数。"""
+
+        async def list_tools(self) -> list[object]:
+            """返回空工具列表。"""
+            return []
+
+    class FakeToolkit:
+        """捕获注入智能体的工具列表。"""
+
+        def __init__(self, **kwargs: object) -> None:
+            """记录工具集构造参数。"""
+            captured["toolkit"] = kwargs
+
+    monkeypatch.setattr(rag_agent, "Agent", lambda **kwargs: object())
+    monkeypatch.setattr(rag_agent, "RAGMiddleware", FakeRagMiddleware)
+    monkeypatch.setattr(rag_agent, "Toolkit", FakeToolkit)
+    monkeypatch.setattr(rag_agent, "create_chat_model", lambda settings: object())
+    received_definitions: list[object] = []
+
+    def fake_create_mcp_clients(received: object) -> list[object]:
+        """记录传入定义并返回固定客户端。"""
+        received_definitions.append(received)
+        return [mcp_client]
+
+    monkeypatch.setattr(rag_agent, "create_mcp_clients", fake_create_mcp_clients)
+
+    await rag_agent.create_rag_agent(
+        Settings(dashscope_api_key="secret", mcp_servers=definitions),
+        knowledge_base,
+    )
+
+    assert captured["toolkit"] == {"tools": [], "mcps": [mcp_client]}
+    assert received_definitions == [definitions]

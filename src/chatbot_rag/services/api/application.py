@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from chatbot_rag.agents import create_rag_agent
 from chatbot_rag.config import Settings
+from chatbot_rag.models import create_asr_model, create_tts_model
 from chatbot_rag.rag import (
     KnowledgeBaseRegistry,
     MediaAssetStore,
@@ -18,10 +19,13 @@ from chatbot_rag.rag import (
 from chatbot_rag.services import (
     ChatService,
     KnowledgeManagementCoordinator,
+    SpeechRecognitionService,
+    SpeechSynthesisService,
 )
 from chatbot_rag.services.api.chat_routes import router as chat_router
 from chatbot_rag.services.api.knowledge_routes import router as knowledge_router
 from chatbot_rag.services.api.media_routes import router as media_router
+from chatbot_rag.services.api.speech_routes import router as speech_router
 
 
 def create_app(
@@ -52,6 +56,7 @@ def create_app(
     app.include_router(chat_router)
     app.include_router(media_router)
     app.include_router(knowledge_router)
+    app.include_router(speech_router)
     return app
 
 
@@ -82,6 +87,13 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
 
         app.state.chat_service = ChatService(create_request_agent)
+        # TTS 模型每次调用独立创建合成器，无需额外的连接生命周期管理。
+        app.state.speech_service = SpeechSynthesisService(
+            create_tts_model(settings),
+        )
+        app.state.speech_recognition_service = SpeechRecognitionService(
+            create_asr_model(settings),
+        )
         try:
             yield
         finally:

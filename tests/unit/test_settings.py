@@ -1,5 +1,6 @@
 """应用配置测试。"""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,8 @@ def test_settings_use_defaults_for_optional_empty_values() -> None:
     assert settings.qdrant_path == Path(".data/qdrant")
     assert settings.rag_top_k == 5
     assert settings.max_upload_bytes == 50 * 1024 * 1024
+    assert settings.asr_model_name == "qwen3-asr-flash"
+    assert settings.asr_language == "zh"
 
 
 def test_settings_reject_missing_api_key() -> None:
@@ -184,5 +187,132 @@ def test_settings_reject_unsafe_resource_id() -> None:
             {
                 "DASHSCOPE_API_KEY": "secret",
                 "CHATBOT_KNOWLEDGE_BASE_NAME": "unsafe/value",
+            },
+        )
+
+
+def test_settings_default_tts_uses_qwen_audio_model() -> None:
+    """未配置语音环境变量时应默认使用 Qwen-Audio-TTS 旗舰配置。"""
+    settings = Settings.from_env({"DASHSCOPE_API_KEY": "secret"})
+
+    assert settings.tts_model_name == "qwen-audio-3.0-tts-plus"
+    assert settings.tts_voice == "longanlingxin"
+    assert settings.mcp_servers == ()
+
+
+def test_settings_load_custom_tts_configuration() -> None:
+    """语音模型与音色应支持环境变量覆盖。"""
+    settings = Settings.from_env(
+        {
+            "DASHSCOPE_API_KEY": "secret",
+            "CHATBOT_TTS_MODEL": "qwen-audio-3.0-tts-flash",
+            "CHATBOT_TTS_VOICE": "longanhuan_v3.6",
+        },
+    )
+
+    assert settings.tts_model_name == "qwen-audio-3.0-tts-flash"
+    assert settings.tts_voice == "longanhuan_v3.6"
+
+
+def test_settings_load_custom_asr_configuration() -> None:
+    """语音识别模型与语言应支持环境变量覆盖。"""
+    settings = Settings.from_env(
+        {
+            "DASHSCOPE_API_KEY": "secret",
+            "CHATBOT_ASR_MODEL": "qwen3-asr-flash-2026-02-10",
+            "CHATBOT_ASR_LANGUAGE": "yue",
+        },
+    )
+
+    assert settings.asr_model_name == "qwen3-asr-flash-2026-02-10"
+    assert settings.asr_language == "yue"
+
+
+def test_settings_parse_mcp_servers_with_direct_headers() -> None:
+    """mcpServers JSON 应保留直接声明的最终请求 Header。"""
+    settings = Settings.from_env(
+        {
+            "DASHSCOPE_API_KEY": "secret",
+            "CHATBOT_MCP_SERVERS_JSON": json.dumps(
+                {
+                    "mcpServers": {
+                        "yunprint-billing": {
+                            "type": "sse",
+                            "url": "https://test-mcp-server.yuncyb.com/sse",
+                            "headers": {
+                                "Authorization": "Bearer current-token",
+                            },
+                            "timeout": 15,
+                            "enableTools": [
+                                "listProducts",
+                                "searchProducts",
+                                "listProducts",
+                            ],
+                        },
+                    },
+                },
+            ),
+        },
+    )
+
+    assert len(settings.mcp_servers) == 1
+    server = settings.mcp_servers[0]
+    assert server.name == "yunprint-billing"
+    assert server.url == "https://test-mcp-server.yuncyb.com/sse"
+    assert server.headers == {"Authorization": "Bearer current-token"}
+    assert server.timeout == 15.0
+    assert server.enable_tools == ("listProducts", "searchProducts")
+
+
+@pytest.mark.parametrize(
+    ("raw_json", "message"),
+    [
+        ("not-json", "must be valid JSON"),
+        ('{"servers":{}}', "must be an object like"),
+        (
+            '{"mcpServers":{"stdio-server":{"type":"stdio","command":"x"}}}',
+            "unsupported type",
+        ),
+        (
+            '{"mcpServers":{"broken":{"type":"sse","url":""}}}',
+            "non-empty 'url'",
+        ),
+        (
+            '{"mcpServers":{"broken":{"type":"sse",'
+            '"url":"https://x/mcp"}}}',
+            "must use a URL ending",
+        ),
+        (
+            '{"mcpServers":{"bad/name":{"type":"sse","url":"https://x/sse"}}}',
+            "not allowed by LLM providers",
+        ),
+        (
+            '{"mcpServers":{"billing":{"type":"sse",'
+            '"url":"https://x/sse","headers":{"Authorization":'
+            '"Bearer ${MISSING_TOKEN}"}}}}',
+            "environment placeholders are not supported",
+        ),
+        (
+            '{"mcpServers":{"billing":{"type":"sse",'
+            '"url":"https://x/sse","headers":{"Authorization":123}}}}',
+            "header values must be strings",
+        ),
+        (
+            '{"mcpServers":{"billing":{"type":"sse",'
+            '"url":"https://x/sse","enableTools":["listProducts",1]}}}',
+            "enableTools must be an array",
+        ),
+    ],
+)
+def test_settings_reject_invalid_mcp_servers_json(
+    raw_json: str,
+    message: str,
+) -> None:
+    """非法 MCP 配置应在启动前失败并给出可定位原因。"""
+    with pytest.raises(ConfigurationError, match=message):
+        Settings.from_env(
+            {
+                "DASHSCOPE_API_KEY": "secret",
+                "CHATBOT_MCP_SERVERS_JSON": raw_json,
             },
         )

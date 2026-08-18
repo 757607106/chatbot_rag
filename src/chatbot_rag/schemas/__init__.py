@@ -27,6 +27,13 @@ from chatbot_rag.schemas.knowledge_schema import (
     RetrievalTestRequest,
     RetrievalTestResponse,
 )
+from chatbot_rag.schemas.speech_schema import (
+    MAX_ASR_AUDIO_BYTES,
+    MAX_TTS_TEXT_LENGTH,
+    SUPPORTED_ASR_MEDIA_TYPES,
+    SpeechRecognitionResponse,
+    SpeechSynthesisRequest,
+)
 
 __all__ = [
     "ChatErrorEvent",
@@ -48,8 +55,13 @@ __all__ = [
     "KnowledgeDocumentVersionResponse",
     "KnowledgeJobResponse",
     "KnowledgeMutationResponse",
+    "MAX_TTS_TEXT_LENGTH",
+    "MAX_ASR_AUDIO_BYTES",
     "RetrievalCandidateResponse",
     "RetrievalTestRequest",
     "RetrievalTestResponse",
+    "SpeechSynthesisRequest",
+    "SpeechRecognitionResponse",
+    "SUPPORTED_ASR_MEDIA_TYPES",
     "ChatTextDeltaEvent",
 ]

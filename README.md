@@ -34,6 +34,11 @@ export CHATBOT_MEDIA_PATH=".data/media"
 export CHATBOT_REMOTE_IMAGE_HOSTS="alidocs.oss-cn-zhangjiakou.aliyuncs.com"
 export CHATBOT_QDRANT_PATH=".data/qdrant"
 export CHATBOT_MAX_UPLOAD_MB="50"
+export CHATBOT_ASR_MODEL="qwen3-asr-flash"
+export CHATBOT_ASR_LANGUAGE="zh"
+export CHATBOT_TTS_MODEL="qwen-audio-3.0-tts-plus"
+export CHATBOT_TTS_VOICE="longanlingxin"
+export CHATBOT_MCP_SERVERS_JSON='{"mcpServers":{"yunprint-billing":{"type":"sse","url":"https://test-mcp-server.yuncyb.com/sse","headers":{"Authorization":"Bearer replace-with-current-token"},"enableTools":["listProducts","searchProducts","searchBillingReferences","previewSalesOrder","getSalesOrder","listSalesOrders"]}}}'
 ```
 
 `tests/docs_test/` 是本地私有知识目录，已被 Git 忽略，其中的业务文档不会上传到
@@ -60,6 +65,10 @@ Markdown 外链图片、Word 内嵌图片和 PDF 页内图片会登记到媒体�
 智能体使用 AgentScope `RAGMiddleware` 的 `agentic` 模式，并把官方
 `search_knowledge` 注册到 `Toolkit`。模型结合当前问题和显式对话历史自主判断是否检索；
 知识库相关问题检索无结果时必须明确拒答，不得用模型常识补全私有事实。
+`CHATBOT_MCP_SERVERS_JSON` 中的远程 SSE/HTTP MCP 工具会与知识库工具
+注册到同一 `Toolkit`。MCP `Authorization` Header 直接写入该 JSON，令牌变更时
+替换整段环境变量即可，不使用二次占位符注入。示例中的 `enableTools`
+只开放查询和预览工具；提交、作废、更新和同步类工具需在有人工确认边界后再显式加入。
 
 ## 启动 Web 对话
 
@@ -82,6 +91,14 @@ pnpm --dir frontend dev
 `POST /api/v1/chat/stream`，并把版本化 NDJSON 文本和图片累积为 assistant-ui
 `LocalRuntime` 消息。图片通过同源 `/api/media/<asset_id>` BFF 读取，浏览器不会
 接触原始文件路径或远程源地址。
+助手消息操作栏的“朗读”按钮会通过同源 `/api/speech/tts` BFF 调用百炼
+`qwen-audio-3.0-tts-plus`，支持合成中取消、播放中停止与失败重试。
+输入框右侧的麦克风按钮使用浏览器 `MediaRecorder` 录音，停止后通过同源
+`/api/speech/transcriptions` BFF 调用百炼 `qwen3-asr-flash`，将识别文本写回
+assistant-ui Composer；黑色声波按钮进入 Voice Mode，约一秒静音会自动结束当前发言，
+再沿用现有聊天 Agent、RAG、MCP 和 TTS 链路完成连续的语音问答。麦克风能力要求
+`localhost` 或 HTTPS 安全上下文，并需要用户授予浏览器麦克风权限。模型 API Key
+只从 Python 服务的 `DASHSCOPE_API_KEY` 读取，不进入浏览器。
 
 左侧栏的“知识库”入口提供无需登录的多知识库管理后台。后台支持知识库创建与切换、
 上传、显式同名替换、异步索引状态、
@@ -112,5 +129,5 @@ pnpm --dir frontend build
 工程已经提供 AgentScope 智能体装配、DashScope 聊天与嵌入模型、文档摄取、
 Qdrant 持久化、`KnowledgeBase`、`RAGMiddleware`、流式 HTTP API 和
 assistant-ui Web 前端。当前 Web 竖切片保证单进程单会话的文本发送、流式回复、
-相关文档图片、取消与公开错误；服务端会话隔离、持久化、用户上传附件和工具事件
-将在协议明确后单独实现。
+相关文档图片、语音输入、Voice Mode、助手回答朗读、取消与公开错误；服务端会话
+持久化、用户上传附件和公开工具事件将在协议明确后单独实现。
