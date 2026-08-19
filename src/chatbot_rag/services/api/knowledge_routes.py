@@ -7,6 +7,7 @@ from typing import Annotated
 from agentscope.message import TextBlock
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     HTTPException,
     Query,
@@ -52,11 +53,13 @@ from chatbot_rag.services import (
     ManagedChunk,
     ManagedDocument,
 )
+from chatbot_rag.services.api.management_auth import require_management_api_key
 
 
 router = APIRouter(
     prefix="/api/v1/knowledge",
     tags=["knowledge-management"],
+    dependencies=[Depends(require_management_api_key)],
 )
 
 _SCOPE_PATH = "/knowledge-bases/{knowledge_base_id}"
@@ -99,6 +102,25 @@ async def create_knowledge_base(
             str(error),
         ) from error
     return _knowledge_base_response(overview)
+
+
+@router.delete(
+    "/knowledge-bases/{knowledge_base_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_knowledge_base(
+    request: Request,
+    knowledge_base_id: str,
+) -> None:
+    """删除一个已清空文档的非默认知识库及其物理资源。"""
+    try:
+        await _get_coordinator(request).delete_knowledge_base(
+            knowledge_base_id,
+        )
+    except CatalogNotFoundError as error:
+        raise _http_error(status.HTTP_404_NOT_FOUND, str(error)) from error
+    except CatalogConflictError as error:
+        raise _http_error(status.HTTP_409_CONFLICT, str(error)) from error
 
 
 @router.get(

@@ -1,16 +1,17 @@
-"""RAG 智能体装配测试。"""
+"""项目聊天智能体装配测试。"""
 
 from typing import Any, cast
 
 import pytest
 from agentscope.rag import KnowledgeBase
 
-from chatbot_rag.agents import knowledge_tools, rag_agent
+from chatbot_rag.agents import chat_agent, knowledge_middleware
+from chatbot_rag.agents.tool_audit import McpToolAuditMiddleware
 from chatbot_rag.config import McpServerDefinition, Settings
 
 
 @pytest.mark.asyncio
-async def test_create_rag_agent_uses_agentic_rag_tool(
+async def test_create_chat_agent_uses_agentic_rag_tool(
     monkeypatch: Any,
 ) -> None:
     """智能体应让模型通过官方工具自主决定是否检索知识库。"""
@@ -20,6 +21,7 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
     model = object()
     search_tool = object()
     knowledge_base = cast(KnowledgeBase, object())
+    extra_knowledge_base = cast(KnowledgeBase, object())
 
     class FakeRagMiddleware:
         """捕获中间件及其参数的测试替身。"""
@@ -50,45 +52,60 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
         captured["agent"] = kwargs
         return object()
 
-    monkeypatch.setattr(rag_agent, "Agent", fake_agent)
+    monkeypatch.setattr(chat_agent, "Agent", fake_agent)
     monkeypatch.setattr(
-        knowledge_tools,
+        knowledge_middleware,
         "RAGMiddleware",
         FakeRagMiddleware,
     )
-    monkeypatch.setattr(rag_agent, "Toolkit", FakeToolkit)
-    monkeypatch.setattr(rag_agent, "create_chat_model", lambda settings: model)
+    monkeypatch.setattr(chat_agent, "Toolkit", FakeToolkit)
+    monkeypatch.setattr(chat_agent, "create_chat_model", lambda settings: model)
     monkeypatch.setattr(
-        rag_agent,
+        chat_agent,
         "create_mcp_clients",
         lambda definitions: [],
     )
 
-    await rag_agent.create_rag_agent(
+    await chat_agent.create_chat_agent(
         Settings(dashscope_api_key="secret", rag_top_k=7),
-        knowledge_base,
+        [knowledge_base, extra_knowledge_base],
     )
 
     agent_kwargs = cast(dict[str, object], captured["agent"])
     assert agent_kwargs["model"] is model
-    assert agent_kwargs["name"] == "rag_assistant"
+    assert agent_kwargs["name"] == "assistant"
     assert len(rag_middlewares) == 1
     assert all(
-        item["knowledge_bases"] == [knowledge_base]
+        item["knowledge_bases"] == [knowledge_base, extra_knowledge_base]
         for item in rag_middlewares
     )
-    assert agent_kwargs["middlewares"]
+    middlewares = cast(list[object], agent_kwargs["middlewares"])
+    assert any(
+        isinstance(middleware, McpToolAuditMiddleware)
+        for middleware in middlewares
+    ), "智能体应装配外部工具调用审计中间件"
     assert agent_kwargs["toolkit"].__class__ is FakeToolkit
     assert captured["toolkit"] == {"tools": [search_tool], "mcps": []}
     assert rag_parameters == [
         {"mode": "agentic", "top_k": 7},
     ]
     system_prompt = cast(str, agent_kwargs["system_prompt"])
+    assert "按用户问题的意图选择工具" in system_prompt
     assert "必须调用 `search_knowledge`" in system_prompt
-    assert "同时调用知识库和 MCP 工具" in system_prompt
+    assert "必须调用已注册的 MCP 工具" in system_prompt
     assert "必须同时调用两类工具" in system_prompt
+    assert "偏实时数据类问题先调用" in system_prompt
+    assert "检索证据回答不了实时数据时再调用 MCP 工具" in system_prompt
+    assert "路由示例只用于判断调用哪个工具" in system_prompt
+    assert "“怎么修改打印价格”只问操作步骤" in system_prompt
+    assert "“怎么充值”是操作说明" in system_prompt
+    assert "两类不同来源，不得互相替代" in system_prompt
+    assert "一次性向用户问清全部缺失信息" in system_prompt
+    assert "不得对同一个无效参数" in system_prompt
+    assert "必须用户明确确认后才调用" in system_prompt
+    assert "通过 `knowledge_bases` 参数只检索对应知识库" in system_prompt
+    assert "同时调用知识库和 MCP 工具" in system_prompt
     assert "明确无关的通用问答" in system_prompt
-    assert "没有明确业务查询意图时，不得随意调用 MCP 工具" in system_prompt
     assert "工具描述和输入 schema" in system_prompt
     assert "检索查询必须简洁、完整且自包含" in system_prompt
     assert "禁止用普通文字输出工具名称" in system_prompt
@@ -111,7 +128,58 @@ async def test_create_rag_agent_uses_agentic_rag_tool(
 
 
 @pytest.mark.asyncio
-async def test_create_rag_agent_registers_configured_mcp_servers(
+async def test_create_chat_agent_accepts_single_knowledge_base(
+    monkeypatch: Any,
+) -> None:
+    """只有一个知识库时智能体仍应正常装配。"""
+    captured: dict[str, object] = {}
+    rag_middlewares: list[dict[str, object]] = []
+    knowledge_base = cast(KnowledgeBase, object())
+
+    class FakeRagMiddleware:
+        """记录构造参数的中间件替身。"""
+
+        class Parameters:
+            """接收 RAG 参数的替身。"""
+
+            def __init__(self, **kwargs: object) -> None:
+                """忽略参数。"""
+
+        def __init__(self, **kwargs: object) -> None:
+            """记录传入的知识库。"""
+            rag_middlewares.append(kwargs)
+
+        async def list_tools(self) -> list[object]:
+            """返回空工具列表。"""
+            return []
+
+    class FakeToolkit:
+        """捕获注入智能体的工具列表。"""
+
+        def __init__(self, **kwargs: object) -> None:
+            """记录工具集构造参数。"""
+            captured["toolkit"] = kwargs
+
+    monkeypatch.setattr(chat_agent, "Agent", lambda **kwargs: object())
+    monkeypatch.setattr(
+        knowledge_middleware,
+        "RAGMiddleware",
+        FakeRagMiddleware,
+    )
+    monkeypatch.setattr(chat_agent, "Toolkit", FakeToolkit)
+    monkeypatch.setattr(chat_agent, "create_chat_model", lambda settings: object())
+    monkeypatch.setattr(chat_agent, "create_mcp_clients", lambda definitions: [])
+
+    await chat_agent.create_chat_agent(
+        Settings(dashscope_api_key="secret"),
+        [knowledge_base],
+    )
+
+    assert rag_middlewares[0]["knowledge_bases"] == [knowledge_base]
+
+
+@pytest.mark.asyncio
+async def test_create_chat_agent_registers_configured_mcp_servers(
     monkeypatch: Any,
 ) -> None:
     """配置声明 MCP 服务器时应转换为客户端并注入工具箱。"""
@@ -149,14 +217,14 @@ async def test_create_rag_agent_registers_configured_mcp_servers(
             """记录工具集构造参数。"""
             captured["toolkit"] = kwargs
 
-    monkeypatch.setattr(rag_agent, "Agent", lambda **kwargs: object())
+    monkeypatch.setattr(chat_agent, "Agent", lambda **kwargs: object())
     monkeypatch.setattr(
-        knowledge_tools,
+        knowledge_middleware,
         "RAGMiddleware",
         FakeRagMiddleware,
     )
-    monkeypatch.setattr(rag_agent, "Toolkit", FakeToolkit)
-    monkeypatch.setattr(rag_agent, "create_chat_model", lambda settings: object())
+    monkeypatch.setattr(chat_agent, "Toolkit", FakeToolkit)
+    monkeypatch.setattr(chat_agent, "create_chat_model", lambda settings: object())
     received_definitions: list[object] = []
 
     def fake_create_mcp_clients(received: object) -> list[object]:
@@ -164,11 +232,11 @@ async def test_create_rag_agent_registers_configured_mcp_servers(
         received_definitions.append(received)
         return [mcp_client]
 
-    monkeypatch.setattr(rag_agent, "create_mcp_clients", fake_create_mcp_clients)
+    monkeypatch.setattr(chat_agent, "create_mcp_clients", fake_create_mcp_clients)
 
-    await rag_agent.create_rag_agent(
+    await chat_agent.create_chat_agent(
         Settings(dashscope_api_key="secret", mcp_servers=definitions),
-        knowledge_base,
+        [knowledge_base],
     )
 
     assert captured["toolkit"] == {"tools": [], "mcps": [mcp_client]}

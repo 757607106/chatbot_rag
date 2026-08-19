@@ -173,7 +173,7 @@ Prompt 无法恢复未被召回的正确入口，也无法可靠识别已经丢�
 | `rag/contextual_chunker.py` | 为所有格式的最终 Chunk 保留来源、标题或页码范围 |
 | `models/reranker.py` | DashScope `qwen3-rerank` 请求、响应校验和安全错误 |
 | `rag/reranking_knowledge_base.py` | 扩大向量候选、调用重排序、回退向量排序 |
-| `agents/rag_agent.py` | 通用显式条件核对、无检索拒答和来源真实性约束 |
+| `agents/chat_agent.py` | 通用显式条件核对、无检索拒答和来源真实性约束 |
 | `models/model_factory.py` | 使用低随机性的事实问答生成参数 |
 | `config/settings.py` | 重排序模型和候选数量配置校验 |
 | `rag/document_ingestor.py` | 提升摄取管线版本，确保旧索引自动重建 |

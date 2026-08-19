@@ -34,6 +34,14 @@ export async function createKnowledgeBase(input: {
   );
 }
 
+export async function deleteKnowledgeBase(knowledgeBaseId: string): Promise<void> {
+  const response = await fetch(
+    `/api/knowledge/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`,
+    { method: "DELETE", cache: "no-store" },
+  );
+  await ensureResponse(response);
+}
+
 export async function listKnowledgeDocuments(
   scope: KnowledgeScope,
 ): Promise<KnowledgeDocumentList> {

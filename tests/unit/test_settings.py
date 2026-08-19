@@ -79,7 +79,7 @@ def test_settings_use_defaults_for_optional_empty_values() -> None:
     )
 
     assert settings.model_name == "qwen-plus"
-    assert settings.agent_name == "rag_assistant"
+    assert settings.agent_name == "assistant"
     assert settings.embedding_model_name == "text-embedding-v4"
     assert settings.embedding_dimensions == 1024
     assert settings.rerank_model_name == "qwen3-rerank"
@@ -343,3 +343,25 @@ def test_settings_reject_invalid_mcp_servers_json(
                 "CHATBOT_MCP_SERVERS_JSON": raw_json,
             },
         )
+
+
+def test_settings_reads_optional_management_api_key() -> None:
+    """管理密钥应支持配置、空白回落和默认关闭。"""
+    configured = Settings.from_env(
+        {
+            "DASHSCOPE_API_KEY": "secret",
+            "CHATBOT_MANAGEMENT_API_KEY": "  admin-secret  ",
+        },
+    )
+    assert configured.management_api_key == "admin-secret"
+
+    blank = Settings.from_env(
+        {
+            "DASHSCOPE_API_KEY": "secret",
+            "CHATBOT_MANAGEMENT_API_KEY": "   ",
+        },
+    )
+    assert blank.management_api_key is None
+
+    default = Settings.from_env({"DASHSCOPE_API_KEY": "secret"})
+    assert default.management_api_key is None

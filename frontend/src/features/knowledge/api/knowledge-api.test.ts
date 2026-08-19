@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createKnowledgeBase, updateKnowledgeChunk } from "@/features/knowledge/api/knowledge-api";
+import {
+  createKnowledgeBase,
+  deleteKnowledgeBase,
+  KnowledgeApiError,
+  updateKnowledgeChunk,
+} from "@/features/knowledge/api/knowledge-api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -82,5 +87,31 @@ describe("知识库管理 API 客户端", () => {
       name: "产品资料",
       description: "产品文档",
     });
+  });
+
+  it("删除知识库发送 DELETE 且接受 204 空响应", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deleteKnowledgeBase("kb_one");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/knowledge/knowledge-bases/kb_one");
+    expect(init.method).toBe("DELETE");
+    expect(init.cache).toBe("no-store");
+  });
+
+  it("删除知识库失败时抛出带状态码的错误", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ detail: "知识库内仍有文档，请先删除全部文档。" }, { status: 409 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await deleteKnowledgeBase("kb_one").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(KnowledgeApiError);
+    expect((error as KnowledgeApiError).status).toBe(409);
+    expect((error as KnowledgeApiError).message).toBe("知识库内仍有文档，请先删除全部文档。");
   });
 });

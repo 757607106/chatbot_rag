@@ -6,6 +6,7 @@ import {
   LoaderCircleIcon,
   PlusIcon,
   RefreshCwIcon,
+  Trash2Icon,
   UploadIcon,
   XIcon,
 } from "lucide-react";
@@ -13,6 +14,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 
 import {
   createKnowledgeBase,
+  deleteKnowledgeBase,
   KnowledgeApiError,
   listKnowledgeBases,
   listKnowledgeDocuments,
@@ -131,6 +133,28 @@ export function KnowledgeWorkspace() {
     await loadDocuments({ knowledgeBaseId }, true);
   };
 
+  const handleDeleteKnowledgeBase = async (knowledgeBaseId: string) => {
+    const target = knowledgeBases.find((item) => item.knowledge_base_id === knowledgeBaseId);
+    if (
+      target === undefined ||
+      !window.confirm(
+        `确定删除知识库“${target.name}”吗？仅允许删除已清空文档的非默认知识库，删除后会同时移除其文档目录与向量集合。`,
+      )
+    ) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await deleteKnowledgeBase(knowledgeBaseId);
+      await initializeWorkspace();
+    } catch (caught) {
+      handleApiError(caught);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleUpload = async (file: File) => {
     if (scope === null) return;
     setLoading(true);
@@ -205,6 +229,9 @@ export function KnowledgeWorkspace() {
           selectedKnowledgeBaseId={selectedKnowledgeBaseId}
           onKnowledgeBaseChange={(knowledgeBaseId) => void selectKnowledgeBase(knowledgeBaseId)}
           onCreateKnowledgeBase={() => setShowCreatePanel((value) => !value)}
+          onDeleteKnowledgeBase={(knowledgeBaseId) =>
+            void handleDeleteKnowledgeBase(knowledgeBaseId)
+          }
         />
 
         {showCreatePanel && (
@@ -278,11 +305,13 @@ function KnowledgeBaseSelector({
   selectedKnowledgeBaseId,
   onKnowledgeBaseChange,
   onCreateKnowledgeBase,
+  onDeleteKnowledgeBase,
 }: {
   knowledgeBases: KnowledgeBaseSummary[];
   selectedKnowledgeBaseId: string | null;
   onKnowledgeBaseChange: (knowledgeBaseId: string) => void;
   onCreateKnowledgeBase: () => void;
+  onDeleteKnowledgeBase: (knowledgeBaseId: string) => void;
 }) {
   return (
     <section className="mt-5 rounded-2xl border border-black/10 bg-[#fafafa] p-3 dark:border-white/10 dark:bg-[#151515]">
@@ -292,32 +321,44 @@ function KnowledgeBaseSelector({
       </div>
       <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
         {knowledgeBases.map((item) => (
-          <button
-            key={item.knowledge_base_id}
-            type="button"
-            onClick={() => onKnowledgeBaseChange(item.knowledge_base_id)}
-            className={cn(
-              "min-w-52 rounded-xl border px-3 py-2.5 text-left transition-colors",
-              selectedKnowledgeBaseId === item.knowledge_base_id
-                ? "border-[#0d0d0d] bg-[#0d0d0d] text-white dark:border-white dark:bg-white dark:text-black"
-                : "border-black/10 bg-white hover:border-black/25 dark:border-white/10 dark:bg-black dark:hover:border-white/30",
-            )}
-          >
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <DatabaseIcon className="size-3.5" />
-              <span className="truncate">{item.name}</span>
-            </span>
-            <span
+          <div key={item.knowledge_base_id} className="flex min-w-52 items-stretch gap-1">
+            <button
+              type="button"
+              onClick={() => onKnowledgeBaseChange(item.knowledge_base_id)}
               className={cn(
-                "mt-1.5 block text-[10px]",
+                "flex-1 rounded-xl border px-3 py-2.5 text-left transition-colors",
                 selectedKnowledgeBaseId === item.knowledge_base_id
-                  ? "text-white/65 dark:text-black/60"
-                  : "text-[#777] dark:text-[#999]",
+                  ? "border-[#0d0d0d] bg-[#0d0d0d] text-white dark:border-white dark:bg-white dark:text-black"
+                  : "border-black/10 bg-white hover:border-black/25 dark:border-white/10 dark:bg-black dark:hover:border-white/30",
               )}
             >
-              {item.total_documents} 文档 · {item.total_chunks} 切片
-            </span>
-          </button>
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <DatabaseIcon className="size-3.5" />
+                <span className="truncate">{item.name}</span>
+              </span>
+              <span
+                className={cn(
+                  "mt-1.5 block text-[10px]",
+                  selectedKnowledgeBaseId === item.knowledge_base_id
+                    ? "text-white/65 dark:text-black/60"
+                    : "text-[#777] dark:text-[#999]",
+                )}
+              >
+                {item.total_documents} 文档 · {item.total_chunks} 切片
+              </span>
+            </button>
+            {!item.is_default && selectedKnowledgeBaseId === item.knowledge_base_id && (
+              <button
+                type="button"
+                aria-label={`删除知识库 ${item.name}`}
+                title="删除知识库"
+                onClick={() => onDeleteKnowledgeBase(item.knowledge_base_id)}
+                className="grid w-9 place-items-center rounded-xl border border-black/10 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-white/10 dark:text-red-300 dark:hover:border-red-800 dark:hover:bg-red-950/40"
+              >
+                <Trash2Icon className="size-4" />
+              </button>
+            )}
+          </div>
         ))}
         <button
           type="button"

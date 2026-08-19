@@ -50,7 +50,9 @@ HTTP 响应头发出后的失败通过流内错误表达：
 {"version":3,"type":"error","code":"agent_error","message":"可公开错误文案"}
 ```
 
-错误码为 `agent_error`、`incomplete_stream` 或 `protocol_error`。公共协议发送助手
+错误码为 `agent_error`、`external_tool_error`、`incomplete_stream` 或 `protocol_error`；
+`external_tool_error` 表示 MCP 外部业务工具栈故障（如服务器不可达、超时），与模型或
+助手服务自身故障（`agent_error`）区分，可直接重试。公共协议发送助手
 回复生命周期、MCP 脱敏状态、文本增量和已脱敏的文档图片引用；AgentScope 思考、
 工具参数、工具原始结果、检索内部标记和异常细节不会进入浏览器。模型输出的图片标记
 只有属于本轮检索结果时才会转换为图片事件，编造、跨轮复用、重复或超过数量上限的
@@ -79,7 +81,7 @@ HTTP 响应头发出后的失败通过流内错误表达：
 
 ```python
 async def create_agent():
-    return await create_rag_agent(settings, knowledge_base)
+    return await create_chat_agent(settings, knowledge_bases)
 
 service = ChatService(create_agent)
 conversation = [ConversationTurn(role="user", content="用户问题")]
@@ -188,8 +190,10 @@ Origin 允许列表只限制浏览器来源，不构成用户身份认证；当�
 
 ## 知识库管理 API
 
-`/api/v1/knowledge/*` 不要求应用内登录或身份请求头。浏览器通过 Next.js
-`/api/knowledge/*` BFF 同源访问这些地址。该接口可以创建、修改和删除检索数据，只应在
+配置 `CHATBOT_MANAGEMENT_API_KEY` 后，`/api/v1/knowledge/*` 全部路由要求
+`X-Api-Key` 请求头与密钥恒时比较匹配，否则返回 401；未配置时不要求身份请求头。
+浏览器通过 Next.js `/api/knowledge/*` BFF 同源访问这些地址，BFF 在服务端附加
+`X-Api-Key`，浏览器不持有密钥。该接口可以创建、修改和删除检索数据，只 应在
 本地或受信网络使用，不得直接暴露到公网。
 
 ### 知识库
@@ -197,6 +201,9 @@ Origin 允许列表只限制浏览器来源，不构成用户身份认证；当�
 - `GET /api/v1/knowledge/knowledge-bases`：列出全部知识库及文档统计。
 - `POST /api/v1/knowledge/knowledge-bases`：创建独立目录和 Qdrant
   collection 的知识库，请求包含 `name` 和 `description`。
+- `DELETE /api/v1/knowledge/knowledge-bases/{knowledge_base_id}`：删除一个
+  已清空文档的非默认知识库及其独立目录、版本目录和 Qdrant collection，返回 204；
+  删除默认知识库或仍有文档的知识库返回 409，不存在返回 404。
 
 ### 文档与任务
 

@@ -315,8 +315,16 @@ async def encode_chat_stream(
                         ),
                     )
                 return
-    except Exception:
+    except Exception as error:
         LOGGER.exception("AgentScope 流式回复处理失败")
+        if _is_external_tool_failure(error):
+            yield _encode_event(
+                ChatErrorEvent(
+                    code="external_tool_error",
+                    message="外部业务工具暂时不可用，请稍后重试。",
+                ),
+            )
+            return
         yield _encode_event(
             ChatErrorEvent(
                 code="agent_error",
@@ -339,6 +347,24 @@ def _protocol_error() -> ChatErrorEvent:
         code="protocol_error",
         message="回复流格式无效，请重试。",
     )
+
+
+_EXTERNAL_TOOL_MODULE_PREFIXES = ("mcp.", "fastmcp.", "agentscope.mcp")
+
+
+def _is_external_tool_failure(error: BaseException) -> bool:
+    """判断异常链是否源自 MCP 客户端栈。
+
+    外部业务系统不可达、超时等故障与模型自身故障需要区分，
+    前者允许用户直接重试而不必怀疑助手服务。
+    """
+    current: BaseException | None = error
+    while current is not None:
+        module = type(current).__module__
+        if module.startswith(_EXTERNAL_TOOL_MODULE_PREFIXES):
+            return True
+        current = current.__cause__
+    return False
 
 
 def _public_mcp_operation(

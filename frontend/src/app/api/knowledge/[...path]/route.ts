@@ -31,6 +31,9 @@ async function proxyKnowledgeRequest(request: Request, context: RouteContext): P
   const contentType = request.headers.get("content-type");
   const headers = new Headers({ Accept: "application/json" });
   if (contentType !== null) headers.set("Content-Type", contentType);
+  // 管理密钥仅存在于 Next.js 服务端环境，浏览器不持有任何凭据。
+  const managementApiKey = process.env.CHATBOT_MANAGEMENT_API_KEY?.trim();
+  if (managementApiKey) headers.set("X-Api-Key", managementApiKey);
 
   try {
     const response = await fetch(upstreamUrl, {

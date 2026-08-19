@@ -2,8 +2,8 @@
 
 from agentscope.mcp import HttpMCPConfig
 
-from chatbot_rag.agents.mcp_binding import create_mcp_clients
 from chatbot_rag.config import McpServerDefinition
+from chatbot_rag.tools import create_mcp_clients
 
 
 def test_create_mcp_clients_builds_stateless_http_clients() -> None:

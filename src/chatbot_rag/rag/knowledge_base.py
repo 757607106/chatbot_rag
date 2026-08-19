@@ -43,6 +43,14 @@ class KnowledgeBaseRuntimeFactory:
             candidate_top_k=self._candidate_top_k,
         )
 
+    async def delete_collection(self, collection: str) -> None:
+        """删除一个知识库的物理向量集合。
+
+        Args:
+            collection: 与被删知识库绑定的 collection 名称。
+        """
+        await self._vector_store.delete_collection(collection)
+
 
 @asynccontextmanager
 async def open_knowledge_base_runtime(

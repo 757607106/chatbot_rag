@@ -37,7 +37,7 @@ class Settings:
 
     dashscope_api_key: str
     model_name: str = "qwen-plus"
-    agent_name: str = "rag_assistant"
+    agent_name: str = "assistant"
     embedding_model_name: str = "text-embedding-v4"
     embedding_dimensions: int = 1024
     rerank_model_name: str = "qwen3-rerank"
@@ -70,6 +70,7 @@ class Settings:
         "http://127.0.0.1:3000",
     )
     mcp_servers: tuple[McpServerDefinition, ...] = ()
+    management_api_key: str | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -90,7 +91,7 @@ class Settings:
             raise ConfigurationError("DASHSCOPE_API_KEY is required")
 
         model_name = source.get("CHATBOT_MODEL", "qwen-plus").strip()
-        agent_name = source.get("CHATBOT_AGENT_NAME", "rag_assistant").strip()
+        agent_name = source.get("CHATBOT_AGENT_NAME", "assistant").strip()
         embedding_model_name = source.get(
             "CHATBOT_EMBEDDING_MODEL",
             "text-embedding-v4",
@@ -193,6 +194,9 @@ class Settings:
         mcp_servers = _read_mcp_servers(
             source.get("CHATBOT_MCP_SERVERS_JSON", ""),
         )
+        management_api_key = (
+            source.get("CHATBOT_MANAGEMENT_API_KEY", "").strip() or None
+        )
         if chunk_overlap >= chunk_size:
             raise ConfigurationError(
                 "CHATBOT_CHUNK_OVERLAP must be less than CHATBOT_CHUNK_SIZE",
@@ -221,7 +225,7 @@ class Settings:
         return cls(
             dashscope_api_key=api_key,
             model_name=model_name or "qwen-plus",
-            agent_name=agent_name or "rag_assistant",
+            agent_name=agent_name or "assistant",
             embedding_model_name=(
                 embedding_model_name or "text-embedding-v4"
             ),
@@ -261,6 +265,7 @@ class Settings:
             realtime_voice_base_url=realtime_voice_base_url,
             realtime_voice_allowed_origins=realtime_voice_allowed_origins,
             mcp_servers=mcp_servers,
+            management_api_key=management_api_key,
         )
 
 

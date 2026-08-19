@@ -49,10 +49,16 @@ export type ChatMessageEndEvent = {
   finish_reason: "completed";
 };
 
+export type ChatErrorCode =
+  | "agent_error"
+  | "external_tool_error"
+  | "incomplete_stream"
+  | "protocol_error";
+
 export type ChatErrorEvent = {
   version: typeof CHAT_PROTOCOL_VERSION;
   type: "error";
-  code: "agent_error" | "incomplete_stream" | "protocol_error";
+  code: ChatErrorCode;
   message: string;
 };
 

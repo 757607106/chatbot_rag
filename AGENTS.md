@@ -25,7 +25,7 @@ chatbot_rag/                         # 仓库根目录，不是 Python 包
 │       ├── __init__.py
 │       ├── agents/                   # 智能体定义与编排
 │       │   ├── __init__.py
-│       │   └── rag_agent.py
+│       │   └── chat_agent.py
 │       ├── tools/                    # AgentScope 工具实现
 │       │   ├── __init__.py
 │       │   └── knowledge_search.py
@@ -108,7 +108,7 @@ chatbot_rag/                         # 仓库根目录，不是 Python 包
 1. Python 包、目录、模块、函数、方法和变量统一使用小写 `snake_case`；类使用 `PascalCase`；常量使用 `UPPER_SNAKE_CASE`。
 2. 名称必须表达业务职责，使用英文单词，禁止拼音、无意义缩写以及空格、连字符或大小写混合的 Python 文件名。
 3. 同类包统一使用复数名称，如 `agents/`、`tools/`、`services/`、`schemas/`；具体模块使用单一职责名称。
-4. 智能体文件使用 `<capability>_agent.py`，如 `rag_agent.py`、`query_rewrite_agent.py`。
+4. 智能体文件使用 `<capability>_agent.py`，如 `chat_agent.py`、`query_rewrite_agent.py`。
 5. 工具文件按能力命名，如 `knowledge_search.py`、`document_reader.py`；服务文件使用 `<domain>_service.py`；数据结构文件使用 `<domain>_schema.py`。
 6. 测试文件使用 `test_<module>.py`，测试函数使用 `test_<expected_behavior>`；目录结构应尽量镜像被测源码。
 7. 避免 `helper.py`、`common.py`、`misc.py`、`custom_tool.py`、`data_processor.py` 等职责模糊的名称。确有通用代码时，使用 `json_codec.py`、`retry_policy.py` 等具体名称。

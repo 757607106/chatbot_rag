@@ -628,3 +628,49 @@ async def test_encode_chat_stream_strips_unretrieved_media_reference() -> None:
     assert "".join(
         str(event.get("text", "")) for event in result
     ) == "安全文本继续回答"
+
+
+class _FakeMcpTransportError(Exception):
+    """模拟 MCP 客户端栈抛出的异常。"""
+
+
+# 让异常类型看起来来自 MCP 客户端模块，验证错误分类按模块归属判断。
+_FakeMcpTransportError.__module__ = "mcp.client.streamable_http"
+
+
+@pytest.mark.asyncio
+async def test_encode_chat_stream_reports_external_tool_error() -> None:
+    """MCP 客户端栈异常应映射为可区分的外部工具错误。"""
+
+    async def broken_stream() -> AsyncIterator[AgentEvent]:
+        """在回复中途抛出 MCP 传输异常。"""
+        yield ReplyStartEvent(
+            session_id="session",
+            reply_id="reply",
+            name="assistant",
+        )
+        raise _FakeMcpTransportError("upstream unavailable")
+
+    result = await _decode(broken_stream())
+
+    assert result[-1]["type"] == "error"
+    assert result[-1]["code"] == "external_tool_error"
+
+
+@pytest.mark.asyncio
+async def test_encode_chat_stream_keeps_agent_error_for_local_failures() -> None:
+    """非外部工具异常仍应归类为智能体错误。"""
+
+    async def broken_stream() -> AsyncIterator[AgentEvent]:
+        """在回复中途抛出本地异常。"""
+        yield ReplyStartEvent(
+            session_id="session",
+            reply_id="reply",
+            name="assistant",
+        )
+        raise ValueError("local failure")
+
+    result = await _decode(broken_stream())
+
+    assert result[-1]["type"] == "error"
+    assert result[-1]["code"] == "agent_error"

@@ -93,6 +93,21 @@ class KnowledgeBaseRegistry:
             documents_root,
         )
 
+    async def delete_knowledge_base(
+        self,
+        knowledge_base_id: str,
+    ) -> None:
+        """删除一个非默认知识库的注册记录。
+
+        Raises:
+            CatalogNotFoundError: 知识库不存在时抛出。
+            CatalogConflictError: 试图删除默认知识库时抛出。
+        """
+        await self._call(
+            self._delete_knowledge_base_sync,
+            knowledge_base_id,
+        )
+
     async def _call(
         self,
         operation: Callable[..., _T],
@@ -100,6 +115,29 @@ class KnowledgeBaseRegistry:
     ) -> _T:
         """在线程中执行短生命周期 SQLite 操作。"""
         return await asyncio.to_thread(operation, *args)
+
+    def _delete_knowledge_base_sync(self, knowledge_base_id: str) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT is_default FROM knowledge_bases
+                WHERE knowledge_base_id = ?
+                """,
+                (knowledge_base_id,),
+            ).fetchone()
+        if row is None:
+            raise CatalogNotFoundError("知识库不存在。")
+        if row["is_default"]:
+            raise CatalogConflictError("默认知识库不能删除。")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM knowledge_bases
+                WHERE knowledge_base_id = ?
+                """,
+                (knowledge_base_id,),
+            )
+            connection.commit()
 
     def _initialize_sync(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

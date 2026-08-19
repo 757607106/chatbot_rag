@@ -2,6 +2,32 @@
 
 ## 未发布
 
+- 工具路由提示词改为按问题意图判定：说明类问题（是什么/为什么/怎么做）走知识库，
+  实时数据类问题（多少/当前/我的/最近的）走 MCP，混合意图同时调用两类工具；
+  兑底规则从单向“优先知识库”改为按意图双向兑底，并增加仅用于路由判断的对比示例，
+  解决实时业务问题被知识库抑制的问题。
+- `agents/rag_agent.py` 更名为 `agents/chat_agent.py`，装配函数更名为
+  `create_chat_agent`，默认智能体名从 `rag_assistant` 改为 `assistant`：
+  该智能体同时承担多知识库检索、MCP 外部业务工具和对话编排，名称不再局限于 RAG。
+
+- 聊天与实时语音链路接入多知识库检索数据面：`chat_knowledge_bases()` 把全部已启动
+  知识库交给 `RAGMiddleware`，模型可用 `knowledge_bases` 参数按库名收窄范围，
+  新建知识库上传文档后立即可被检索；默认知识库仍排在首位。详见
+  `docs/adr/010-management-api-key-and-multi-knowledge-retrieval.md`。
+- 新增可选管理密钥 `CHATBOT_MANAGEMENT_API_KEY`：配置后 `/api/v1/knowledge/*`
+  全部路由要求 `X-Api-Key` 头恒时比较匹配；Next.js BFF 在服务端附加该头，
+  浏览器不持有密钥；未配置时保持本地开发开放行为。
+- 新增 `DELETE /api/v1/knowledge/knowledge-bases/{id}` 与前端删除入口：仅允许删除
+  已清空文档的非默认知识库，删除时同步移除独立目录、版本目录和 Qdrant collection。
+- 实时语音会话与文本 Agent 同箱绑定 MCP 外部工具，语音系统提示词补充外部业务
+  数据路由与“不得编造业务数据”约束。
+- 聊天流协议 v3 新增错误码 `external_tool_error`：MCP 客户端栈故障与模型自身
+  故障分离，便于前端差异化重试引导。
+- 文本 Agent 新增 `McpToolAuditMiddleware`：对 `mcp__` 工具调用输出结构化审计
+  日志（工具名、状态、异常类型、耗时），不记录工具参数与返回内容。
+- 模块归位：MCP 客户端装配移至 `tools/mcp_binding.py`，`agents/knowledge_tools.py`
+  更名为 `agents/knowledge_middleware.py`，新增 `agents/tool_audit.py`。
+
 - Web NDJSON 协议升级到版本 3，为文本聊天增加脱敏的 MCP 工具状态；前端使用
   assistant-ui 原生 `tool-call` part 显示受控中文业务标签，不公开服务器名、真实工具名、
   参数、原始结果或异常详情。

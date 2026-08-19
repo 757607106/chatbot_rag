@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
-from agentscope.rag import ApproxTokenChunker
+from agentscope.rag import ApproxTokenChunker, KnowledgeBase
 
 from chatbot_rag.config import Settings
 from chatbot_rag.rag import (
+    CatalogConflictError,
     CatalogNotFoundError,
     ContextPreservingChunker,
     DocumentIngestor,
@@ -22,6 +27,8 @@ from chatbot_rag.services.knowledge_service import (
     KnowledgeManagementService,
     KnowledgeServiceError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidKnowledgeResourceError(KnowledgeServiceError):
@@ -125,6 +132,46 @@ class KnowledgeManagementCoordinator:
             failed_documents=0,
         )
 
+    async def chat_knowledge_bases(self) -> list[KnowledgeBase]:
+        """返回聊天与语音可检索的全部知识库句柄。
+
+        默认知识库始终排在首位；注册表中存在但尚未启动的知识库会
+        在此按需启动，保证管理面新建后立即可被检索链路使用。
+        """
+        knowledge_bases: list[KnowledgeBase] = []
+        for record in await self._registry.list_knowledge_bases():
+            service = await self._start_service(record)
+            knowledge_bases.append(service.knowledge_base)
+        return knowledge_bases
+
+    async def delete_knowledge_base(self, knowledge_base_id: str) -> None:
+        """删除一个已清空文档的非默认知识库及其物理资源。
+
+        Raises:
+            CatalogNotFoundError: 知识库不存在或未启动时抛出。
+            CatalogConflictError: 目标是默认知识库或仍有文档时抛出。
+        """
+        record = await self._registry.get_knowledge_base(knowledge_base_id)
+        if record.is_default:
+            raise CatalogConflictError("默认知识库不能删除。")
+        service = self._services.get(knowledge_base_id)
+        if service is None:
+            raise CatalogNotFoundError("知识库不存在。")
+        if await service.list_documents():
+            raise CatalogConflictError("知识库内仍有文档，请先删除全部文档。")
+
+        # 先清理向量集合：失败时知识库仍完好，可直接重试。
+        await self._runtime_factory.delete_collection(record.collection_name)
+        await service.stop()
+        self._services.pop(knowledge_base_id, None)
+        await self._registry.delete_knowledge_base(knowledge_base_id)
+        versions_path = (
+            self._settings.document_versions_path / knowledge_base_id
+        )
+        # 目录清理允许失败：注册行已删除，残留空目录不影响任何链路。
+        await asyncio.to_thread(_remove_tree, record.documents_path)
+        await asyncio.to_thread(_remove_tree, versions_path)
+
     async def get_record(
         self,
         knowledge_base_id: str,
@@ -205,6 +252,11 @@ def _validate_name(value: str, field_name: str) -> str:
     if len(normalized) > 80:
         raise InvalidKnowledgeResourceError(f"{field_name}不能超过 80 个字符。")
     return normalized
+
+
+def _remove_tree(path: Path) -> None:
+    """删除知识库专属目录；缺失时视为已清理。"""
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def _validate_description(value: str) -> str:

@@ -127,5 +127,10 @@ class ChatErrorEvent(_StrictSchema):
 
     version: Literal[3] = CHAT_PROTOCOL_VERSION
     type: Literal["error"] = "error"
-    code: Literal["agent_error", "incomplete_stream", "protocol_error"]
+    code: Literal[
+        "agent_error",
+        "external_tool_error",
+        "incomplete_stream",
+        "protocol_error",
+    ]
     message: str

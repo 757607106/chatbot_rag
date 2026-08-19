@@ -12,8 +12,11 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 - `models`：创建聊天、嵌入模型和百炼实时语音 WebSocket 连接，并通过 DashScope SDK
   适配 qwen3-rerank。
 - `rag`：负责文档与图片解析、媒体资产、切块、幂等索引、Qdrant 生命周期和知识库装配。
-- `agents`：组合聊天模型、系统提示词和 AgentScope `RAGMiddleware`，并把配置声明的
-  MCP 服务器绑定为同一 `Toolkit` 中的外部工具。
+- `agents`：组合聊天模型、系统提示词和 AgentScope `RAGMiddleware`，装配外部工具
+  调用审计中间件；`agents/knowledge_middleware.py` 是知识库检索中间件工厂，
+  `agents/tool_audit.py` 是 MCP 调用审计中间件。
+- `tools`：把配置声明的 MCP 服务器绑定为 AgentScope `Toolkit` 可调度的外部工具
+  （`tools/mcp_binding.py`）。
 - `services`：向协议适配层提供最终回复、原生事件流聊天和实时双工语音用例；
   `RealtimeVoiceService` 只负责受控事件转换和 AgentScope 工具执行，不保存跨连接会话。
 - `services/knowledge_coordinator.py`：维护知识库注册表及每库独立服务生命周期。
@@ -34,7 +37,9 @@ assistant-ui 构建 Web 对话界面。架构必须保持界面、对话协议�
 ## 知识库管理控制面
 
 控制面支持创建和切换多个知识库。`CHATBOT_KNOWLEDGE_BASE_NAME` 指定兼容既有部署的
-默认资源；现有聊天 Agent 继续只绑定该默认知识库，不在聊天输入区增加知识库选择器。
+默认资源；聊天与语音链路通过 `chat_knowledge_bases()` 绑定全部已启动知识库
+（默认知识库排在首位），模型可用 `search_knowledge` 的 `knowledge_bases` 参数按
+库名收窄检索范围，未指定时检索全部知识库；聊天输入区不增加知识库选择器。
 管理控制面由以下边界组成：
 
 ```text
@@ -60,10 +65,13 @@ payload；编辑不会修改原文件。版本回滚选择一个不可变原文�
 默认文档目录与默认 collection 保持原值。已有 `.doc`、`.ppt` 文件登记为不支持状态。
 当前每个知识库使用一个单进程工作协程；多实例部署仍需替换为共享任务执行器。
 
-管理页面和管理 API 不提供内置身份验证，页面打开后直接初始化知识库工作区。Next.js BFF
-只负责同源转发、路径校验和上游错误映射，不维护登录会话或附加身份凭据。该管理面只适用
-于本地开发或受信网络；部署时不得直接暴露到公网，需要远程访问时必须在应用外部增加网络
-或身份访问控制。
+管理页面和管理 API 使用可选共享密钥防护：配置 `CHATBOT_MANAGEMENT_API_KEY` 后，
+`/api/v1/knowledge/*` 全部路由要求 `X-Api-Key` 头恒时比较匹配，否则返回 401；未配置时
+保持本地开发的开放行为。Next.js BFF 在服务端读取同名环境变量并向上游附加该头，只负责
+同源转发、路径校验和上游错误映射，不维护登录会话，浏览器不持有任何密钥。该管理面
+只适用于本地开发或受信网络；部署时不得直接暴露到公网，需要远程访问时必须在应用
+外部增加网络或身份访问控制。已清空文档的非默认知识库可通过删除接口连同独立
+目录、版本目录和 Qdrant collection 一并移除。
 
 ## 目标 Web 对话链路
 
@@ -187,10 +195,10 @@ AgentScope 原生 Parser 读取文本与表格，并显式关闭图片抽取，�
 
 每个浏览器连接对应一个独立 Qwen-Audio Realtime 会话，默认模型为速度优先的
 `qwen-audio-3.0-realtime-flash`，轮次检测使用 `smart_turn`，因此输入、转写、生成和播放
-可以重叠，用户说话能打断当前播报。服务端会话只注册由 AgentScope 2.0.5
-`RAGMiddleware.list_tools()` 产生的只读 `search_knowledge`；文本聊天仍使用原来的
-AgentScope Agent，并可额外绑定 MCP 工具。语音链路不把 MCP 写操作或文本 Agent 再串到
-实时会话中。
+可以重叠，用户说话能打断当前播报。服务端会话注册由 AgentScope 2.0.5
+`RAGMiddleware.list_tools()` 产生的只读 `search_knowledge`，与文本 Agent 一样同箱绑定
+配置声明的 MCP 外部工具；语音系统提示词要求外部业务数据必须调用 MCP 工具且不得
+编造金额、数量或状态。语音链路不把文本 Agent 再串到实时会话中。
 
 浏览器只能发送 `audio.append`，单帧经 Base64 解码后不得超过 6400 字节且必须是完整
 PCM16 采样。服务端只公开会话就绪、语音起止、用户/助手转写、音频增量、脱敏工具状态、
