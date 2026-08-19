@@ -36,6 +36,7 @@ def test_settings_load_expected_environment_values() -> None:
             "CHATBOT_CHUNK_OVERLAP": "48",
             "CHATBOT_RAG_TOP_K": "8",
             "CHATBOT_MAX_UPLOAD_MB": "25",
+            "CHATBOT_DEBUG": "true",
         },
     )
 
@@ -66,6 +67,7 @@ def test_settings_load_expected_environment_values() -> None:
     assert settings.chunk_overlap == 48
     assert settings.rag_top_k == 8
     assert settings.max_upload_bytes == 25 * 1024 * 1024
+    assert settings.debug is True
 
 
 def test_settings_use_defaults_for_optional_empty_values() -> None:
@@ -112,6 +114,25 @@ def test_settings_use_defaults_for_optional_empty_values() -> None:
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     )
+    assert settings.debug is False
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", "1", "yes", "on"])
+def test_settings_parse_debug_flag_enabled(value: str) -> None:
+    """CHATBOT_DEBUG 的各种真值写法均应解析为开启。"""
+    settings = Settings.from_env(
+        {"DASHSCOPE_API_KEY": "secret", "CHATBOT_DEBUG": value},
+    )
+
+    assert settings.debug is True
+
+
+def test_settings_reject_invalid_debug_flag() -> None:
+    """CHATBOT_DEBUG 非布尔值时应在启动前失败。"""
+    with pytest.raises(ConfigurationError, match="CHATBOT_DEBUG"):
+        Settings.from_env(
+            {"DASHSCOPE_API_KEY": "secret", "CHATBOT_DEBUG": "maybe"},
+        )
 
 
 def test_settings_reject_missing_api_key() -> None:

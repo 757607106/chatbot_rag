@@ -71,6 +71,7 @@ class Settings:
     )
     mcp_servers: tuple[McpServerDefinition, ...] = ()
     management_api_key: str | None = None
+    debug: bool = False
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -197,6 +198,7 @@ class Settings:
         management_api_key = (
             source.get("CHATBOT_MANAGEMENT_API_KEY", "").strip() or None
         )
+        debug = _read_bool(source, "CHATBOT_DEBUG", False)
         if chunk_overlap >= chunk_size:
             raise ConfigurationError(
                 "CHATBOT_CHUNK_OVERLAP must be less than CHATBOT_CHUNK_SIZE",
@@ -266,6 +268,7 @@ class Settings:
             realtime_voice_allowed_origins=realtime_voice_allowed_origins,
             mcp_servers=mcp_servers,
             management_api_key=management_api_key,
+            debug=debug,
         )
 
 
@@ -504,6 +507,22 @@ def _read_non_negative_int(
     if value < 0:
         raise ConfigurationError(f"{name} must not be negative")
     return value
+
+
+def _read_bool(
+    source: Mapping[str, str],
+    name: str,
+    default: bool,
+) -> bool:
+    """读取布尔配置，空值沿用默认值。"""
+    raw_value = source.get(name, "").strip().lower()
+    if not raw_value:
+        return default
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(f"{name} must be a boolean")
 
 
 def _read_int(

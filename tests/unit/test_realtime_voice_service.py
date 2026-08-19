@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from chatbot_rag.dialogue_policy import CORE_DIALOGUE_POLICY
 from chatbot_rag.models import RealtimeVoiceConnection
 from chatbot_rag.services import RealtimeVoiceService
 from chatbot_rag.services.api.voice_routes import router
@@ -154,6 +155,11 @@ def test_realtime_voice_relays_validated_pcm_and_public_events() -> None:
 
     session_update = connection.sent[0]
     assert session_update["type"] == "session.update"
+    assert CORE_DIALOGUE_POLICY in session_update["session"]["instructions"]
+    assert (
+        "停顿通过短句、逗号和自然断句表达"
+        in session_update["session"]["instructions"]
+    )
     assert session_update["session"]["turn_detection"] == {
         "type": "smart_turn",
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -71,6 +72,11 @@ def create_app(
 async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
     """在 HTTP 应用生命周期内持有知识库与聊天服务。"""
     settings = Settings.from_env()
+    # debug 模式下把 chatbot_rag 包日志降到 DEBUG，输出检索、流式处理等调试细节；
+    # 默认保持 INFO，与 uvicorn 根日志级别一致。
+    logging.getLogger("chatbot_rag").setLevel(
+        logging.DEBUG if settings.debug else logging.INFO,
+    )
     app.state.management_api_key = settings.management_api_key
     media_store = MediaAssetStore(
         settings.media_path,
